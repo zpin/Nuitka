@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -97,6 +97,12 @@ def getStandardLibraryPaths():
                     )
                 )
             )
+
+        for stdlib_path in set(stdlib_paths):
+            candidate = Utils.joinpath(stdlib_path, "lib-tk")
+
+            if Utils.isDir(candidate):
+                stdlib_paths.add(candidate)
 
         getStandardLibraryPaths.result = [
             Utils.normcase(stdlib_path)

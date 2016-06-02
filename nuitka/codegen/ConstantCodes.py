@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -30,6 +30,7 @@ for a single module only.
 import ctypes
 import re
 import struct
+import sys
 from logging import warning
 
 import marshal
@@ -80,24 +81,13 @@ def _isAttributeName(value):
     # used for generator expressions, iterator value.
     return _match_attribute_names.match(value) or value == ".0"
 
-# Indicator to standalone mode code, if we need pickling module early on, which
-# we try to avoid, but can happen with things we cannot create directly.
-_needs_pickle = False
-
-def needsPickleInit():
-    return _needs_pickle
 
 
 def _getUnstreamCode2(constant_value):
     saved = getStreamedConstant(
         constant_value = constant_value
     )
-
     assert type(saved) is bytes
-
-    # We need to remember having to use pickle, pylint: disable=W0603
-    global _needs_pickle
-    _needs_pickle = True
 
     return stream_data.getStreamDataCode(saved)
 
@@ -1012,8 +1002,14 @@ def getConstantsDefinitionCode(context):
         context = context
     )
 
+    if Options.shallMakeModule():
+        sys_executable = None
+    else:
+        sys_executable = context.getConstantCode(sys.executable)
+
     return template_constants_reading % {
         "constant_declarations" : '\n'.join(constant_declarations),
         "constant_inits"        : indented(constant_inits),
-        "constant_checks"       : indented(constant_checks)
+        "constant_checks"       : indented(constant_checks),
+        "sys_executable"        : sys_executable
     }

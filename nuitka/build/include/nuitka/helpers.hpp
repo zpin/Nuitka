@@ -1,4 +1,4 @@
-//     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+//     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 //
 //     Part of "Nuitka", an optimizing Python compiler that is compatible and
 //     integrates with CPython, but also works on its own.
@@ -21,6 +21,7 @@
 #define _DEBUG_FRAME 0
 #define _DEBUG_REFRAME 0
 #define _DEBUG_EXCEPTIONS 0
+#define _DEBUG_COROUTINE 0
 
 extern PyObject *const_tuple_empty;
 extern PyObject *const_str_plain___dict__;
@@ -161,11 +162,13 @@ NUITKA_MAY_BE_UNUSED static PyObject *TO_COMPLEX( PyObject *real, PyObject *imag
 
     if ( imag == NULL)
     {
-        return CALL_FUNCTION_WITH_ARGS1( (PyObject *)&PyComplex_Type, real );
+        PyObject *args[] = { real };
+        return CALL_FUNCTION_WITH_ARGS1( (PyObject *)&PyComplex_Type, args );
     }
     else
     {
-        return CALL_FUNCTION_WITH_ARGS2( (PyObject *)&PyComplex_Type, real, imag );
+        PyObject *args[] = { real, imag };
+        return CALL_FUNCTION_WITH_ARGS2( (PyObject *)&PyComplex_Type, args );
     }
 }
 
@@ -279,7 +282,14 @@ NUITKA_MAY_BE_UNUSED static PyObject *TO_INT2( PyObject *value, PyObject *base )
             value_str = PyBytes_AS_STRING( value );
         }
 
-        if ( strlen( value_str ) != (size_t)size || size == 0 )
+        PyObject *result = NULL;
+
+        if ( size != 0 && strlen( value_str ) == (size_t)size )
+        {
+            result = PyInt_FromString( value_str, NULL, (int)base_int );
+        }
+
+        if (unlikely( result == NULL ))
         {
             PyErr_Format(
                 PyExc_ValueError,
@@ -291,7 +301,7 @@ NUITKA_MAY_BE_UNUSED static PyObject *TO_INT2( PyObject *value, PyObject *base )
             return NULL;
         }
 
-        return PyInt_FromString( value_str, NULL, (int)base_int );
+        return result;
     }
     else
     {
@@ -480,11 +490,10 @@ NUITKA_MAY_BE_UNUSED static PyObject *IMPORT_NAME( PyObject *module, PyObject *i
 }
 
 
-#include "nuitka/helper/indexes.hpp"
 #include "nuitka/helper/subscripts.hpp"
-#include "nuitka/helper/slices.hpp"
 #include "nuitka/helper/attributes.hpp"
 #include "nuitka/helper/iterators.hpp"
+#include "nuitka/helper/slices.hpp"
 
 #include "nuitka/builtins.hpp"
 
@@ -520,22 +529,22 @@ extern PyObject *COMPILE_CODE( PyObject *source_code, PyObject *file_name, PyObj
 #endif
 
 
-// For quicker builtin open() functionality.
+// For quicker built-in open() functionality.
 extern PyObject *BUILTIN_OPEN( PyObject *file_name, PyObject *mode, PyObject *buffering );
 
-// For quicker builtin chr() functionality.
+// For quicker built-in chr() functionality.
 extern PyObject *BUILTIN_CHR( PyObject *value );
 
-// For quicker builtin ord() functionality.
+// For quicker built-in ord() functionality.
 extern PyObject *BUILTIN_ORD( PyObject *value );
 
-// For quicker builtin bin() functionality.
+// For quicker built-in bin() functionality.
 extern PyObject *BUILTIN_BIN( PyObject *value );
 
-// For quicker builtin oct() functionality.
+// For quicker built-in oct() functionality.
 extern PyObject *BUILTIN_OCT( PyObject *value );
 
-// For quicker builtin hex() functionality.
+// For quicker built-in hex() functionality.
 extern PyObject *BUILTIN_HEX( PyObject *value );
 
 // For quicker callable() functionality.
@@ -551,17 +560,17 @@ extern PyObject *BUILTIN_TYPE1( PyObject *arg );
 // type).
 extern PyObject *BUILTIN_TYPE3( PyObject *module_name, PyObject *name, PyObject *bases, PyObject *dict );
 
-// For built-in builtin range() functionality.
+// For built-in built-in range() functionality.
 extern PyObject *BUILTIN_RANGE3( PyObject *low, PyObject *high, PyObject *step );
 extern PyObject *BUILTIN_RANGE2( PyObject *low, PyObject *high );
 extern PyObject *BUILTIN_RANGE( PyObject *boundary );
 
 extern PyObject *BUILTIN_XRANGE( PyObject *low, PyObject *high, PyObject *step );
 
-// For built-in builtin len() functionality.
+// For built-in built-in len() functionality.
 extern PyObject *BUILTIN_LEN( PyObject *boundary );
 
-// For built-in builtin super() functionality.
+// For built-in built-in super() functionality.
 extern PyObject *BUILTIN_SUPER( PyObject *type, PyObject *object );
 
 // For built-in isinstance() functionality.
@@ -624,12 +633,23 @@ extern void enhancePythonTypes( void );
 // Setup meta path based loader if any.
 extern void setupMetaPathBasedLoader( void );
 
-// Parse the command line parameters and provide it to sys module. It may
-// maniputate them, therefore argc is passed as a pointer.
-extern bool setCommandLineParameters( int *argc, char *argv[], bool initial );
+// Parse the command line parameters and provide it to "sys" built-in module.
 
-// Replace builtin functions with ones that accept compiled types too.
+#if PYTHON_VERSION >= 300
+typedef wchar_t ** argv_type_t;
+extern argv_type_t convertCommandLineParameters( int argc, char **argv );
+#else
+typedef char ** argv_type_t;
+#endif
+extern bool setCommandLineParameters( int argc, argv_type_t argv, bool initial );
+
+// Replace built-in functions with ones that accept compiled types too.
 extern void patchBuiltinModule( void );
+
+/* Replace inspect functions with ones that handle compiles types too. */
+#if PYTHON_VERSION >= 300
+extern void patchInspectModule( void );
+#endif
 
 // Replace type comparison with one that accepts compiled types too, will work
 // for "==" and "!=", but not for "is" checks.
@@ -757,7 +777,10 @@ extern char *getBinaryDirectoryHostEncoded();
 extern void setEarlyFrozenModulesFileAttribute( void );
 #endif
 
-// For making paths relative to where we got loaded from.
+/* For making paths relative to where we got loaded from. Do not provide any
+ * absolute paths as relative value, this is not as capable as "os.path.join",
+ * instead just works on strings.
+ */
 extern PyObject *MAKE_RELATIVE_PATH( PyObject *relative );
 
 #include <nuitka/threading.hpp>

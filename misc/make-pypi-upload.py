@@ -1,5 +1,5 @@
-#!/usr/bin/env python
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#!/usr/bin/env PYTHONUNBUFFERED=1 python
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -34,23 +34,25 @@ branch_name = subprocess.check_output(
 ).strip()
 
 assert branch_name == "master", branch_name
-assert "pre" not in nuitka_version
+assert "pre" not in nuitka_version and "rc" not in nuitka_version
 
 # Need to remove the contents from the Rest, or else PyPI will not render
 # it. Stupid but true.
 contents = open("README.rst", "rb").read()
-contents = contents.replace(b".. contents::", b"")
+contents = contents.replace(b".. contents::\n", b"")
+contents = contents.replace(b".. image:: doc/images/Nuitka-Logo-Symbol.png\n", b"")
+contents = contents.replace(b".. raw:: pdf\n\n   PageBreak oneColumn\n   SetPageCounter 1", b"")
+
 open("README.rst", "wb").write(contents)
 contents = open("README.rst", "rb").read()
 assert b".. contents" not in contents
 
+print("Creating documentation.")
 assert 0 == os.system("misc/make-doc.py")
+print("Creating source distribution and uploading it.")
 assert 0 == os.system("python setup.py sdist upload")
 
-# A delay might be necessary before making the check.
-
-
-for i in range(60):
+for _i in range(60):
     # Wait some time for PyPI to catch up with us. Without delay
     # the old version will still appear. Since this is running
     # in a Buildbot, we need not be optimal.

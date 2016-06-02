@@ -1,4 +1,4 @@
-//     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+//     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 //
 //     Part of "Nuitka", an optimizing Python compiler that is compatible and
 //     integrates with CPython, but also works on its own.
@@ -18,6 +18,11 @@
 #ifndef __NUITKA_HELPER_SLICES_H__
 #define __NUITKA_HELPER_SLICES_H__
 
+#if PYTHON_VERSION < 300
+// Note: It appears that Python3 has no index slicing operations anymore, but
+// uses slice objects all the time. That's fine and make sure we adhere to it by
+// guarding the presence of the helpers.
+
 static inline bool IS_INDEXABLE( PyObject *value )
 {
     return
@@ -29,10 +34,24 @@ static inline bool IS_INDEXABLE( PyObject *value )
         PyIndex_Check( value );
 }
 
-#if PYTHON_VERSION < 300
-// Note: It appears that Python3 has no index slicing operations anymore, but
-// uses slice objects all the time. That's fine and make sure we adhere to it by
-// guarding the presence of the helpers.
+static Py_ssize_t CONVERT_TO_INDEX( PyObject *value )
+{
+    CHECK_OBJECT( value );
+
+    if ( PyInt_Check( value ) )
+    {
+        return PyInt_AS_LONG( value );
+    }
+    else if ( PyIndex_Check( value ) )
+    {
+        return PyNumber_AsSsize_t( value, NULL );
+    }
+    else
+    {
+        PyErr_Format( PyExc_TypeError, "slice indices must be integers or None or have an __index__ method" );
+        return -1;
+    }
+}
 
 NUITKA_MAY_BE_UNUSED static PyObject *LOOKUP_SLICE( PyObject *source, PyObject *lower, PyObject *upper )
 {

@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -21,7 +21,8 @@ Right now only the creation is done here. But more should be added later on.
 """
 
 from nuitka import Options
-from nuitka.utils import Utils
+from nuitka.PythonVersions import python_version
+from nuitka.utils.Utils import isAbsolutePath
 
 from .ConstantCodes import getConstantCode
 
@@ -33,6 +34,10 @@ def getCodeObjectsDeclCode(context):
         declaration = "static PyCodeObject *%s;" % code_identifier
 
         statements.append(declaration)
+
+    if context.getOwner().getFullName() == "__main__":
+        statements.append("/* For use in MainProgram.cpp. */")
+        statements.append("PyCodeObject *codeobj_main = NULL;")
 
     return statements
 
@@ -55,7 +60,8 @@ def getCodeObjectsInitCode(context):
 
         # We do not care about release of this object, as code object live
         # forever anyway.
-        if Options.getFileReferenceMode() == "frozen":
+        if Options.getFileReferenceMode() == "frozen" or \
+           isAbsolutePath(module_filename):
             template = "module_filename_obj = %s;"
         else:
             template = "module_filename_obj = MAKE_RELATIVE_PATH( %s );"
@@ -74,28 +80,29 @@ def getCodeObjectsInitCode(context):
         # Make sure the filename is always identical.
         assert code_object_key[0] == module_filename
 
-        if code_object_key[2] != 0 and \
-           (code_object_key[7] or Utils.python_version < 340):
-            co_flags.append("CO_NEWLOCALS")
-
-        if code_object_key[6]:
+        if code_object_key[6] == "Generator":
             co_flags.append("CO_GENERATOR")
+        elif code_object_key[6] == "Coroutine":
+            co_flags.append("CO_COROUTINE")
 
         if code_object_key[7]:
             co_flags.append("CO_OPTIMIZED")
 
         if code_object_key[8]:
-            co_flags.append("CO_VARARGS")
+            co_flags.append("CO_NEWLOCALS")
 
         if code_object_key[9]:
+            co_flags.append("CO_VARARGS")
+
+        if code_object_key[10]:
             co_flags.append("CO_VARKEYWORDS")
 
-        if not code_object_key[10]:
+        if not code_object_key[11]:
             co_flags.append("CO_NOFREE")
 
-        co_flags.extend(code_object_key[11])
+        co_flags.extend(code_object_key[12])
 
-        if Utils.python_version < 300:
+        if python_version < 300:
             code = "%s = MAKE_CODEOBJ( %s, %s, %d, %s, %d, %s );" % (
                 code_identifier,
                 filename_code,
@@ -131,4 +138,7 @@ def getCodeObjectsInitCode(context):
 
         statements.append(code)
 
+        if context.getOwner().getFullName() == "__main__":
+            if code_object_key[1] == "<module>":
+                statements.append("codeobj_main = %s;" % code_identifier)
     return statements

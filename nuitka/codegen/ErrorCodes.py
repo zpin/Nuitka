@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -120,7 +120,7 @@ def getErrorFormatExitBoolCode(condition, exception, args, emit, context):
 
     context.markAsNeedsExceptionVariables()
 
-    if len(args) == 1:
+    if len(args) == 1 and type(args[0]) is str:
         from .ConstantCodes import getModuleConstantCode
 
         set_exception = [
@@ -132,7 +132,15 @@ def getErrorFormatExitBoolCode(condition, exception, args, emit, context):
             "exception_tb = NULL;"
         ]
     else:
-        assert False, args
+        set_exception = [
+            "exception_type = %s;" % exception,
+            "Py_INCREF( exception_type );",
+            "exception_value = Py%s_FromFormat( %s );" % (
+                "String" if python_version < 300 else "Unicode",
+                ", ".join( '"%s"' % arg for arg in args )
+            ),
+            "exception_tb = NULL;"
+        ]
 
 
     if python_version >= 300:
@@ -150,7 +158,7 @@ def getErrorFormatExitBoolCode(condition, exception, args, emit, context):
                 "NORMALIZE_EXCEPTION( &exception_type, &exception_value, &exception_tb );"
             )
             set_exception.append(
-                "CHAIN_EXCEPTION( exception_type, exception_value );"
+                "CHAIN_EXCEPTION( exception_value );"
             )
 
     emit(
@@ -199,7 +207,7 @@ def getExceptionKeeperVariableNames(keeper_index):
         ),
         "NUITKA_MAY_BE_UNUSED int exception_keeper_lineno_%d%s;" % (
             keeper_index,
-            "= -1" if debug else ""
+            " = -1" if debug else ""
         )
     )
 
@@ -268,14 +276,14 @@ def getMustNotGetHereCode(reason, context, emit):
         }
     )
 
-    if provider.isExpressionFunctionBody() and not provider.isGenerator():
-        emit("return NULL;")
-    elif provider.isPythonModule():
-        emit("PyErr_SetObject( PyExc_RuntimeError, Py_None );")
+    if provider.isExpressionGeneratorObjectBody():
+        emit("return;")
+    elif provider.isExpressionCoroutineObjectBody():
+        emit("return;")
+    elif provider.isCompiledPythonModule():
         emit("return MOD_RETURN_VALUE( NULL );")
     else:
-        emit("PyErr_SetObject( PyExc_RuntimeError, Py_None );")
-        emit("return;")
+        emit("return NULL;")
 
 
 def getAssertionCode(check, emit):

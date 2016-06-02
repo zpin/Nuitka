@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -34,20 +34,23 @@ from nuitka.nodes.AttributeNodes import (
 )
 from nuitka.nodes.BuiltinRefNodes import ExpressionBuiltinRef
 from nuitka.nodes.CallNodes import ExpressionCall, ExpressionCallNoKeywords
-from nuitka.nodes.ClassNodes import ExpressionSelectMetaclass
-from nuitka.nodes.ComparisonNodes import ExpressionComparison
+from nuitka.nodes.ClassNodes import (
+    ExpressionClassBody,
+    ExpressionSelectMetaclass
+)
+from nuitka.nodes.CodeObjectSpecs import CodeObjectSpec
+from nuitka.nodes.ComparisonNodes import ExpressionComparisonIn
 from nuitka.nodes.ConditionalNodes import (
     ExpressionConditional,
     StatementConditional
 )
 from nuitka.nodes.ConstantRefNodes import ExpressionConstantRef
 from nuitka.nodes.ContainerMakingNodes import ExpressionMakeTuple
-from nuitka.nodes.ContainerOperationNodes import (
+from nuitka.nodes.DictionaryNodes import (
     ExpressionDictOperationGet,
     StatementDictOperationRemove
 )
 from nuitka.nodes.FunctionNodes import (
-    ExpressionFunctionBody,
     ExpressionFunctionCall,
     ExpressionFunctionCreation,
     ExpressionFunctionQualnameRef,
@@ -57,7 +60,6 @@ from nuitka.nodes.GlobalsLocalsNodes import (
     ExpressionBuiltinLocals,
     StatementSetLocals
 )
-from nuitka.nodes.ParameterSpecs import ParameterSpec
 from nuitka.nodes.ReturnNodes import StatementReturn
 from nuitka.nodes.SubscriptNodes import ExpressionSubscriptLookup
 from nuitka.nodes.TypeNodes import ExpressionBuiltinType1
@@ -65,7 +67,7 @@ from nuitka.nodes.VariableRefNodes import (
     ExpressionTempVariableRef,
     ExpressionVariableRef
 )
-from nuitka.utils import Utils
+from nuitka.PythonVersions import python_version
 
 from .Helpers import (
     buildNode,
@@ -80,17 +82,6 @@ from .Helpers import (
 )
 from .ReformulationTryFinallyStatements import makeTryFinallyStatement
 
-# TODO: Once we start to modify these, we should make sure, the copy is not
-# shared.
-make_class_parameters = ParameterSpec(
-    name          = "class",
-    normal_args   = (),
-    list_star_arg = None,
-    dict_star_arg = None,
-    default_count = 0,
-    kw_only_args  = ()
-)
-
 
 def _buildClassNode3(provider, node, source_ref):
     # Many variables, due to the huge re-formulation that is going on here,
@@ -98,7 +89,7 @@ def _buildClassNode3(provider, node, source_ref):
 
     # This function is the Python3 special case with special re-formulation as
     # according to developer manual.
-    class_statements, class_doc = extractDocFromBody(node)
+    class_statement_nodes, class_doc = extractDocFromBody(node)
 
     # We need a scope for the temporary variables, and they might be closured.
     temp_scope = provider.allocateTempScope(
@@ -123,20 +114,58 @@ def _buildClassNode3(provider, node, source_ref):
         name       = "prepared"
     )
 
-    class_creation_function = ExpressionFunctionBody(
+    class_creation_function = ExpressionClassBody(
         provider   = provider,
-        is_class   = True,
-        parameters = make_class_parameters,
         name       = node.name,
         doc        = class_doc,
+        flags      = set(),
         source_ref = source_ref
     )
 
+    if python_version >= 340 and False: # TODO: Temporarily reverted:
+        tmp_class = class_creation_function.allocateTempVariable(
+            temp_scope = None,
+            name       = "__class__"
+        )
+
+        class_target_variable_ref = ExpressionTargetTempVariableRef(
+            variable   = tmp_class,
+            source_ref = source_ref
+        )
+        class_variable_ref = ExpressionTempVariableRef(
+            variable   = tmp_class,
+            source_ref = source_ref
+        )
+    else:
+        class_variable = class_creation_function.getVariableForAssignment(
+            "__class__"
+        )
+
+        class_target_variable_ref = ExpressionTargetVariableRef(
+            variable_name = "__class__",
+            variable      = class_variable,
+            source_ref    = source_ref
+        )
+        class_variable_ref = ExpressionVariableRef(
+            variable_name = "__class__",
+            variable      = class_variable,
+            source_ref    = source_ref
+        )
+
+    code_object = CodeObjectSpec(
+        code_name     = node.name,
+        code_kind     = "Class",
+        arg_names     = (),
+        kw_only_count = 0,
+        has_starlist  = False,
+        has_stardict  = False
+    )
+
     body = buildStatementsNode(
-        provider   = class_creation_function,
-        nodes      = class_statements,
-        frame      = True,
-        source_ref = source_ref
+        provider    = class_creation_function,
+        nodes       = class_statement_nodes,
+        code_object = code_object,
+        source_ref  = source_ref
     )
 
     source_ref_orig = source_ref
@@ -194,13 +223,13 @@ def _buildClassNode3(provider, node, source_ref):
         )
 
     # The "__qualname__" attribute is new in Python 3.3.
-    if Utils.python_version >= 330:
+    if python_version >= 330:
         qualname = class_creation_function.getFunctionQualname()
         qualname_variable = class_creation_function.getVariableForAssignment(
             "__qualname__"
         )
 
-        if Utils.python_version < 340:
+        if python_version < 340:
             qualname_ref = ExpressionConstantRef(
                 constant      = qualname,
                 source_ref    = source_ref,
@@ -224,38 +253,8 @@ def _buildClassNode3(provider, node, source_ref):
             )
         )
 
-        if Utils.python_version >= 340:
+        if python_version >= 340:
             qualname_assign = statements[-1]
-
-    if Utils.python_version >= 340 and False: # TODO: Temporarily reverted:
-        tmp_class = class_creation_function.allocateTempVariable(
-            temp_scope = None,
-            name       = "__class__"
-        )
-
-        class_target_variable_ref = ExpressionTargetTempVariableRef(
-            variable   = tmp_class,
-            source_ref = source_ref
-        )
-        class_variable_ref = ExpressionTempVariableRef(
-            variable   = tmp_class,
-            source_ref = source_ref
-        )
-    else:
-        class_variable = class_creation_function.getVariableForAssignment(
-            "__class__"
-        )
-
-        class_target_variable_ref = ExpressionTargetVariableRef(
-            variable_name = "__class__",
-            variable      = class_variable,
-            source_ref    = source_ref
-        )
-        class_variable_ref = ExpressionVariableRef(
-            variable_name = "__class__",
-            variable      = class_variable,
-            source_ref    = source_ref
-        )
 
     statements += [
         body,
@@ -309,6 +308,11 @@ def _buildClassNode3(provider, node, source_ref):
 
     class_creation_function.setBody(body)
 
+    class_creation_function.registerProvidedVariable(tmp_bases)
+    class_creation_function.registerProvidedVariable(tmp_class_decl_dict)
+    class_creation_function.registerProvidedVariable(tmp_metaclass)
+    class_creation_function.registerProvidedVariable(tmp_prepared)
+
     # The class body is basically a function that implicitly, at the end
     # returns its created class and cannot have other return statements
     # contained.
@@ -319,6 +323,7 @@ def _buildClassNode3(provider, node, source_ref):
                 function_body = class_creation_function,
                 source_ref    = source_ref
             ),
+            code_object  = code_object,
             defaults     = (),
             kw_defaults  = None,
             annotations  = None,
@@ -379,7 +384,6 @@ def _buildClassNode3(provider, node, source_ref):
                     for keyword in
                     node.keywords
                 ],
-                lazy_order = False,
                 source_ref = source_ref
             ),
             source_ref   = source_ref
@@ -391,8 +395,7 @@ def _buildClassNode3(provider, node, source_ref):
             ),
             source       = ExpressionSelectMetaclass(
                 metaclass  = ExpressionConditional(
-                    condition      = ExpressionComparison(
-                        comparator = "In",
+                    condition      = ExpressionComparisonIn(
                         left       = ExpressionConstantRef(
                             constant      = "metaclass",
                             source_ref    = source_ref,
@@ -453,8 +456,7 @@ def _buildClassNode3(provider, node, source_ref):
             source_ref   = source_ref_orig
         ),
         StatementConditional(
-            condition  = ExpressionComparison(
-                comparator = "In",
+            condition  = ExpressionComparisonIn(
                 left       = ExpressionConstantRef(
                     constant      = "metaclass",
                     source_ref    = source_ref,
@@ -549,13 +551,10 @@ def _buildClassNode3(provider, node, source_ref):
         ),
     )
 
-    if Utils.python_version >= 340:
+    if python_version >= 340:
         class_assign = statements[-1]
 
-        # assert False, class_creation_function
         class_creation_function.qualname_setup = class_assign, qualname_assign
-
-
 
     final = (
         StatementReleaseVariable(
@@ -585,27 +584,33 @@ def _buildClassNode3(provider, node, source_ref):
 
 
 def _buildClassNode2(provider, node, source_ref):
-    class_statements, class_doc = extractDocFromBody(node)
-
     # This function is the Python2 special case with special re-formulation as
-    # according to developer manual.
+    # according to developer manual, and it's very detailed, pylint: disable=R0914
+    class_statement_nodes, class_doc = extractDocFromBody(node)
 
-    function_body = ExpressionFunctionBody(
+    function_body = ExpressionClassBody(
         provider   = provider,
-        is_class   = True,
-        parameters = make_class_parameters,
         name       = node.name,
         doc        = class_doc,
+        flags      = set(),
         source_ref = source_ref
+    )
+
+    code_object = CodeObjectSpec(
+        code_name     = node.name,
+        code_kind     = "Class",
+        arg_names     = (),
+        kw_only_count = 0,
+        has_starlist  = False,
+        has_stardict  = False
     )
 
     body = buildStatementsNode(
-        provider   = function_body,
-        nodes      = class_statements,
-        frame      = True,
-        source_ref = source_ref
+        provider    = function_body,
+        nodes       = class_statement_nodes,
+        code_object = code_object,
+        source_ref  = source_ref
     )
-
     if body is not None:
         # The frame guard has nothing to tell its line number to.
         body.source_ref = source_ref.atInternal()
@@ -698,6 +703,7 @@ def _buildClassNode2(provider, node, source_ref):
                         function_body = function_body,
                         source_ref    = source_ref
                     ),
+                    code_object  = None,
                     defaults     = (),
                     kw_defaults  = None,
                     annotations  = None,
@@ -714,8 +720,7 @@ def _buildClassNode2(provider, node, source_ref):
                 source_ref = source_ref
             ),
             source       = ExpressionConditional(
-                condition      =  ExpressionComparison(
-                    comparator = "In",
+                condition      =  ExpressionComparisonIn(
                     left       = ExpressionConstantRef(
                         constant      = "__metaclass__",
                         source_ref    = source_ref,
@@ -865,7 +870,7 @@ def buildClassNode(provider, node, source_ref):
 
     # Python2 and Python3 are similar, but fundamentally different, so handle
     # them in dedicated code.
-    if Utils.python_version < 300:
+    if python_version < 300:
         return _buildClassNode2(provider, node, source_ref)
     else:
         return _buildClassNode3(provider, node, source_ref)

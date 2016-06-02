@@ -1,4 +1,4 @@
-//     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+//     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 //
 //     Part of "Nuitka", an optimizing Python compiler that is compatible and
 //     integrates with CPython, but also works on its own.
@@ -18,12 +18,12 @@
 #ifndef __NUITKA_FRAME_STACK_H__
 #define __NUITKA_FRAME_STACK_H__
 
-#define MAKE_OR_REUSE_FRAME( cache_identifier, code_identifier, module_identifier ) \
-    if ( isFrameUnusable( cache_identifier ) )                                \
-    {                                                                         \
-        Py_XDECREF( cache_identifier );                                       \
-        cache_identifier = MAKE_FRAME( code_identifier, module_identifier );  \
-    }                                                                         \
+#define MAKE_OR_REUSE_FRAME( cache_identifier, code_identifier, module_identifier )    \
+    if ( isFrameUnusable( cache_identifier ) )                                         \
+    {                                                                                  \
+        Py_XDECREF( cache_identifier );                                                \
+        cache_identifier = MAKE_FUNCTION_FRAME( code_identifier, module_identifier );  \
+    }                                                                                  \
 
 inline static void assertCodeObject( PyCodeObject *code_object )
 {

@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -15,17 +15,91 @@
 #     See the License for the specific language governing permissions and
 #     limitations under the License.
 #
-""" Code generation for dicts.
+""" Code generation for dictionaries.
 
-Right now only the creation and a few operations on dictionaries are done here.
 """
 
+from nuitka import Options
 from nuitka.PythonVersions import python_version
 
 from .ErrorCodes import getErrorExitBoolCode, getErrorExitCode, getReleaseCodes
+from .Helpers import generateChildExpressionsCode, generateExpressionCode
 
 
-def generateDictionaryCreationCode(to_name, pairs, emit, context):
+def generateBuiltinDictCode(to_name, expression, emit, context):
+    if expression.getPositionalArgument():
+        seq_name = context.allocateTempName("dict_seq")
+
+        generateExpressionCode(
+            to_name    = seq_name,
+            expression = expression.getPositionalArgument(),
+            emit       = emit,
+            context    = context,
+            allow_none = True
+        )
+    else:
+        seq_name = None
+
+    if expression.getNamedArgumentPairs():
+        # If there is no sequence to mix in, then directly generate
+        # into to_name.
+
+        if seq_name is None:
+            getDictionaryCreationCode(
+                to_name = to_name,
+                pairs   = expression.getNamedArgumentPairs(),
+                emit    = emit,
+                context = context
+            )
+
+            dict_name = None
+        else:
+            dict_name = context.allocateTempName("dict_arg")
+
+            getDictionaryCreationCode(
+                to_name = dict_name,
+                pairs   = expression.getNamedArgumentPairs(),
+                emit    = emit,
+                context = context
+            )
+    else:
+        dict_name = None
+
+    if seq_name is not None:
+        emit(
+            "%s = TO_DICT( %s, %s );" % (
+                to_name,
+                seq_name,
+                "NULL" if dict_name is None else dict_name
+            )
+        )
+
+        getReleaseCodes(
+            release_names = (seq_name, dict_name),
+            emit          = emit,
+            context       = context
+        )
+
+        getErrorExitCode(
+            check_name = to_name,
+            emit       = emit,
+            context    = context
+        )
+
+        context.addCleanupTempName(to_name)
+
+
+def generateDictionaryCreationCode(to_name, expression, emit, context):
+    getDictionaryCreationCode(
+        to_name = to_name,
+        pairs   = expression.getPairs(),
+        emit    = emit,
+        context = context
+    )
+
+
+def getDictionaryCreationCode(to_name, pairs, emit, context):
+
     emit(
         "%s = _PyDict_NewPresized( %d );" % (
             to_name,
@@ -34,8 +108,6 @@ def generateDictionaryCreationCode(to_name, pairs, emit, context):
     )
 
     context.addCleanupTempName(to_name)
-
-    from .CodeGeneration import generateExpressionCode
 
     def generateValueCode(dict_value_name, pair):
         generateExpressionCode(
@@ -102,7 +174,55 @@ def generateDictionaryCreationCode(to_name, pairs, emit, context):
             context.removeCleanupTempName(dict_key_name)
 
 
-def getDictOperationGetCode(to_name, dict_name, key_name, emit, context):
+def generateDictOperationUpdateCode(statement, emit, context):
+    value_arg_name = context.allocateTempName("dictupdate_value", unique = True)
+    generateExpressionCode(
+        to_name    = value_arg_name,
+        expression = statement.getValue(),
+        emit       = emit,
+        context    = context
+    )
+
+    dict_arg_name = context.allocateTempName("dictupdate_dict", unique = True)
+    generateExpressionCode(
+        to_name    = dict_arg_name,
+        expression = statement.getDict(),
+        emit       = emit,
+        context    = context
+    )
+
+    res_name = context.getIntResName()
+
+    emit("assert( PyDict_Check( %s ) );" % dict_arg_name)
+    emit(
+        "%s = PyDict_Update( %s, %s );" % (
+            res_name,
+            dict_arg_name,
+            value_arg_name
+        )
+    )
+
+    getReleaseCodes(
+        release_names = (dict_arg_name, value_arg_name),
+        emit          = emit,
+        context       = context
+    )
+
+    getErrorExitBoolCode(
+        condition   = "%s == -1" % res_name,
+        needs_check = statement.mayRaiseException(BaseException),
+        emit        = emit,
+        context     = context
+    )
+
+
+def generateDictOperationGetCode(to_name, expression, emit, context):
+    dict_name, key_name = generateChildExpressionsCode(
+        expression = expression,
+        emit       = emit,
+        context    = context
+    )
+
     emit(
         "%s = DICT_GET_ITEM( %s, %s );" % (
             to_name,
@@ -118,51 +238,34 @@ def getDictOperationGetCode(to_name, dict_name, key_name, emit, context):
     )
 
     getErrorExitCode(
-        check_name = to_name,
-        emit       = emit,
-        context    = context
+        check_name  = to_name,
+        needs_check = expression.mayRaiseException(BaseException),
+        emit        = emit,
+        context     = context
     )
 
     context.addCleanupTempName(to_name)
 
 
-def getBuiltinDict2Code(to_name, seq_name, dict_name, emit, context):
-    # Seq not available must have been optimized way already.
-    assert seq_name is not None
+def generateDictOperationInCode(to_name, expression, emit, context):
+    inverted = expression.isExpressionDictOperationNOTIn()
 
-    emit(
-        "%s = TO_DICT( %s, %s );" % (
-            to_name,
-            seq_name,
-            "NULL" if dict_name is None else dict_name
-        )
-    )
-
-    getReleaseCodes(
-        release_names = (seq_name, dict_name),
-        emit          = emit,
-        context       = context
-    )
-
-    getErrorExitCode(
-        check_name = to_name,
+    dict_name, key_name = generateChildExpressionsCode(
+        expression = expression,
         emit       = emit,
         context    = context
     )
 
-    context.addCleanupTempName(to_name)
-
-
-def getDictOperationRemoveCode(dict_name, key_name, emit, context):
-    res_name = context.getBoolResName()
+    res_name = context.getIntResName()
 
     emit(
-        "%s = DICT_REMOVE_ITEM( %s, %s );" % (
+        "%s = PyDict_Contains( %s, %s );" % (
             res_name,
-            dict_name,
-            key_name
+            key_name,
+            dict_name
         )
     )
+
 
     getReleaseCodes(
         release_names = (dict_name, key_name),
@@ -171,41 +274,117 @@ def getDictOperationRemoveCode(dict_name, key_name, emit, context):
     )
 
     getErrorExitBoolCode(
-        condition = "%s == false" % res_name,
-        emit      = emit,
-        context   = context
+        condition   = "%s == -1" % res_name,
+        needs_check = expression.mayRaiseException(BaseException),
+        emit        = emit,
+        context     = context
+    )
+
+    emit(
+        "%s = BOOL_FROM( %s == %s );" % (
+            to_name,
+            res_name,
+            '1' if not inverted else '0'
+        )
     )
 
 
-def getDictOperationSetCode(to_name, dict_name, key_name, value_name, emit,
-                            context):
+def generateDictOperationSetCode(statement, emit, context):
+    value_arg_name = context.allocateTempName("dictset_value", unique = True)
+    generateExpressionCode(
+        to_name    = value_arg_name,
+        expression = statement.getValue(),
+        emit       = emit,
+        context    = context
+    )
+
+    dict_arg_name = context.allocateTempName("dictset_dict", unique = True)
+    generateExpressionCode(
+        to_name    = dict_arg_name,
+        expression = statement.getDict(),
+        emit       = emit,
+        context    = context
+    )
+
+    key_arg_name = context.allocateTempName("dictset_key", unique = True)
+    generateExpressionCode(
+        to_name    = key_arg_name,
+        expression = statement.getKey(),
+        emit       = emit,
+        context    = context
+    )
+    context.setCurrentSourceCodeReference(statement.getSourceReference())
+
     res_name = context.getIntResName()
 
     emit(
         "%s = PyDict_SetItem( %s, %s, %s );" % (
             res_name,
-            dict_name,
-            key_name,
-            value_name
+            dict_arg_name,
+            key_arg_name,
+            value_arg_name
         )
     )
 
     getReleaseCodes(
-        release_names = (dict_name, key_name, value_name),
+        release_names = (value_arg_name, dict_arg_name, key_arg_name),
         emit          = emit,
         context       = context
     )
 
     getErrorExitBoolCode(
-        condition = "%s != 0" % res_name,
-        emit      = emit,
-        context   = context
+        condition   = "%s != 0" % res_name,
+        emit        = emit,
+        needs_check = not statement.getKey().isKnownToBeHashable(),
+        context     = context
     )
 
-    # Only assign if necessary.
-    if context.isUsed(to_name):
-        emit(
-            "%s = Py_None;" % to_name
+
+
+def generateDictOperationRemoveCode(statement, emit, context):
+    dict_arg_name = context.allocateTempName("dictdel_dict", unique = True)
+    generateExpressionCode(
+        to_name    = dict_arg_name,
+        expression = statement.getDict(),
+        emit       = emit,
+        context    = context
+    )
+
+    key_arg_name = context.allocateTempName("dictdel_key", unique = True)
+    generateExpressionCode(
+        to_name    = key_arg_name,
+        expression = statement.getKey(),
+        emit       = emit,
+        context    = context
+    )
+
+    old_source_ref = context.setCurrentSourceCodeReference(
+        statement.getKey().getSourceReference()
+           if Options.isFullCompat() else
+        statement.getSourceReference()
+    )
+
+    res_name = context.getBoolResName()
+
+    emit(
+        "%s = DICT_REMOVE_ITEM( %s, %s );" % (
+            res_name,
+            dict_arg_name,
+            key_arg_name
         )
-    else:
-        context.forgetTempName(to_name)
+    )
+
+    getReleaseCodes(
+        release_names = (dict_arg_name, key_arg_name),
+        emit          = emit,
+        context       = context
+    )
+
+    getErrorExitBoolCode(
+        condition   = "%s == false" % res_name,
+        needs_check = statement.mayRaiseException(BaseException),
+        emit        = emit,
+        context     = context
+    )
+
+    context.setCurrentSourceCodeReference(old_source_ref)

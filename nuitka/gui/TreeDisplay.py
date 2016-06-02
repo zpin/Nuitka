@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -50,13 +50,12 @@ class NodeTreeModelItem:
                 self.node.getVisitableNodes()
             ]
 
-        if self.node.isPythonModule():
-            self.children.extend(
-                NodeTreeModelItem(child, self)
-                for child in
-                self.node.getFunctions()
-            )
-
+            if self.node.isCompiledPythonModule():
+                self.children.extend(
+                    NodeTreeModelItem(child, self)
+                    for child in
+                    self.node.getUsedFunctions()
+                )
 
         return self.children
 
@@ -168,9 +167,16 @@ class NodeTreeModel(QtCore.QAbstractItemModel):
         current = self.root_node
 
         while tree_path:
-            current = current.getVisitableNodes()[ tree_path[0] ]
-
+            index = tree_path[0]
             del tree_path[0]
+
+            if current.isCompiledPythonModule():
+                if index == 0:
+                    current = current.getBody()
+                else:
+                    current = tuple(current.getUsedFunctions())[index-1]
+            else:
+                current = current.getVisitableNodes()[index]
 
         return current
 

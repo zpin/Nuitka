@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -15,7 +15,7 @@
 #     See the License for the specific language governing permissions and
 #     limitations under the License.
 #
-""" Node the calls to the 'hash' builtin.
+""" Node the calls to the 'hash' built-in.
 
 This is a specific thing, which must be calculated at run time, but we can
 predict things about its type, and the fact that it won't raise an exception

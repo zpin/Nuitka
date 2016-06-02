@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -17,8 +17,9 @@
 #     limitations under the License.
 #
 
-import os, shutil, subprocess
-
+import os
+import shutil
+import subprocess
 from optparse import OptionParser
 
 parser = OptionParser()
@@ -144,7 +145,9 @@ for filename in os.listdir('.'):
         assert 0 == os.system("gunzip " + new_name)
         assert 0 == os.system(
             "tar --wildcards --delete --file " + new_name[:-3] + \
-            " Nuitka*/tests/benchmarks Nuitka*/*.pdf Nuitka*/build/inline_copy"
+            " Nuitka*/tests/benchmarks Nuitka*/*.pdf" + \
+            " Nuitka*/build/inline_copy" + \
+            " Nuitka*/Nuitka.egg-info"
         )
         assert 0 == os.system("gzip -9 -n " + new_name[:-3])
 
@@ -153,7 +156,7 @@ for filename in os.listdir('.'):
         # Fixup for py2dsc not taking our custom suffix into account, so we need
         # to rename it ourselves.
         before_deb_name = filename[:-7].lower().replace('-', '_')
-        after_deb_name = before_deb_name.replace("pre", "~pre")
+        after_deb_name = before_deb_name.replace("rc", "~rc")
 
         assert 0 == os.system(
             "mv 'deb_dist/%s.orig.tar.gz' 'deb_dist/%s+ds.orig.tar.gz'" % (

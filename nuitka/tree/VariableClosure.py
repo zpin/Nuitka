@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -26,11 +26,10 @@ complete.
 
 from nuitka import PythonVersions, Variables
 from nuitka.nodes.NodeMakingHelpers import makeConstantReplacementNode
-from nuitka.nodes.ReturnNodes import StatementGeneratorReturn
 from nuitka.Options import isFullCompat
+from nuitka.PythonVersions import python_version
 from nuitka.tree import SyntaxErrors
-from nuitka.utils.Utils import python_version
-from nuitka.VariableRegistry import addVariableUsage, isSharedLogically
+from nuitka.VariableRegistry import addVariableUsage, isSharedAmongScopes
 
 from .Operations import VisitorNoopMixin, visitTree
 from .ReformulationFunctionStatements import addFunctionVariableReleases
@@ -66,8 +65,6 @@ class VariableClosureLookupVisitorPhase1(VisitorNoopMixin):
                     variable_name = non_local_name
                 )
 
-                node.registerProvidedVariable(variable)
-
                 if variable.isModuleVariable():
                     SyntaxErrors.raiseSyntaxError(
                         "no binding for nonlocal '%s' found" % (
@@ -83,10 +80,13 @@ class VariableClosureLookupVisitorPhase1(VisitorNoopMixin):
                                        python_version >= 340
                     )
 
+                node.registerProvidedVariable(variable)
+                addVariableUsage(variable, node)
+
     @staticmethod
     def _handleQualnameSetup(node):
         if node.qualname_setup is not None:
-            if node.isClassDictCreation():
+            if node.isExpressionClassBody():
                 class_assign, qualname_assign = node.qualname_setup
                 class_variable = class_assign.getTargetVariableRef().getVariable()
 
@@ -168,9 +168,28 @@ class VariableClosureLookupVisitorPhase1(VisitorNoopMixin):
                         node.getVariable()
                     )
                 )
+        elif node.isExpressionGeneratorObjectBody():
+            self._handleNonLocal(node)
+            # Python3.4 allows for class declarations to be made global, even
+            # after they were declared, so we need to fix this up.
+
+            # TODO: Then this may not even have to be here at all.
+            if python_version >= 340:
+                self._handleQualnameSetup(node)
+        elif node.isExpressionCoroutineObjectBody():
+            self._handleNonLocal(node)
+
+            # TODO: Then this may not even have to be here at all.
+            self._handleQualnameSetup(node)
+        elif node.isExpressionClassBody():
+            self._handleNonLocal(node)
+
+            # Python3.4 allows for class declarations to be made global, even
+            # after they were declared, so we need to fix this up.
+            if python_version >= 340:
+                self._handleQualnameSetup(node)
         elif node.isExpressionFunctionBody():
-            if python_version >= 300:
-                self._handleNonLocal(node)
+            self._handleNonLocal(node)
 
             for variable in node.getParameters().getAllVariables():
                 addVariableUsage(variable, node)
@@ -195,12 +214,10 @@ class VariableClosureLookupVisitorPhase1(VisitorNoopMixin):
                 while True:
                     current = current.getParentVariableProvider()
 
-                    if current.isPythonModule():
+                    if current.isCompiledPythonModule():
                         break
 
-                    assert current.isExpressionFunctionBody()
-
-                    if current.isClassDictCreation():
+                    if current.isExpressionClassBody():
                         if seen_function:
                             node.setAttributeName(
                                 "_%s%s" % (
@@ -214,14 +231,14 @@ class VariableClosureLookupVisitorPhase1(VisitorNoopMixin):
                         seen_function = True
         # Check if continue and break are properly in loops. If not, raise a
         # syntax error.
-        elif node.isStatementBreakLoop() or node.isStatementContinueLoop():
+        elif node.isStatementLoopBreak() or node.isStatementLoopContinue():
             current = node
 
             while True:
-                if current.isPythonModule() or \
-                   current.isExpressionFunctionBody():
-                    if node.isStatementContinueLoop():
+                if current.isParentVariableProvider():
+                    if node.isStatementLoopContinue():
                         message = "'continue' not properly in loop"
+
                         col_offset   = 16 if python_version >= 300 else None
                         display_line = True
                         source_line  = None
@@ -249,34 +266,6 @@ class VariableClosureLookupVisitorPhase1(VisitorNoopMixin):
 
                 if current.isStatementLoop():
                     break
-
-    def onLeaveNode(self, node):
-        # Return statements in generators are not really that, instead they are
-        # exception raises, fix that up now. Doing it right from the onset,
-        # would be a bit more difficult, as the knowledge that something is a
-        # generator, requires a second pass.
-        if node.isStatementReturn():
-            return_consumer = node.getParentReturnConsumer()
-
-            if return_consumer.isExpressionFunctionBody() and \
-               return_consumer.isGenerator():
-                return_value = node.getExpression()
-
-                if python_version < 330:
-                    if not return_value.isExpressionReturnedValueRef() and \
-                       (not return_value.isExpressionConstantRef() or \
-                        return_value.getConstant() is not None):
-                        SyntaxErrors.raiseSyntaxError(
-                            "'return' with argument inside generator",
-                            source_ref = node.getSourceReference(),
-                        )
-
-                node.replaceWith(
-                    StatementGeneratorReturn(
-                        expression = return_value,
-                        source_ref = node.getSourceReference()
-                    )
-                )
 
 
 class VariableClosureLookupVisitorPhase2(VisitorNoopMixin):
@@ -309,12 +298,11 @@ class VariableClosureLookupVisitorPhase2(VisitorNoopMixin):
         # Need to catch functions with "exec" and closure variables not allowed.
         if python_version < 300 and \
            not was_taken and \
-           provider.isExpressionFunctionBody() and \
+           provider.isExpressionFunctionBodyBase() and \
            variable.getOwner() is not provider:
             parent_provider = provider.getParentVariableProvider()
 
-            while parent_provider.isExpressionFunctionBody() and \
-                  parent_provider.isClassDictCreation():
+            while parent_provider.isExpressionClassBody():
                 parent_provider = parent_provider.getParentVariableProvider()
 
             if parent_provider.isExpressionFunctionBody() and \
@@ -345,26 +333,6 @@ class VariableClosureLookupVisitorPhase2(VisitorNoopMixin):
             addVariableUsage(node.getVariable(), provider)
 
 
-    # For Python3, every function in a class is supposed to take "__class__" as
-    # a reference, so make sure that happens.
-    if python_version >= 300:
-        def onLeaveNode(self, node):
-            if node.isExpressionFunctionBody() and node.isClassClosureTaker():
-                if python_version < 340 or True: # TODO: Temporarily reverted:
-                    node.getVariableForReference(
-                        variable_name = "__class__"
-                    )
-                else:
-                    parent_provider = node.getParentVariableProvider()
-
-                    variable = parent_provider.getTempVariable(
-                        temp_scope = None,
-                        name       = "__class__"
-                    )
-
-                    node.addClosureVariable(variable)
-
-
 class VariableClosureLookupVisitorPhase3(VisitorNoopMixin):
     """ Variable closure phase 3: Find errors and complete frame variables.
 
@@ -381,7 +349,7 @@ class VariableClosureLookupVisitorPhase3(VisitorNoopMixin):
             variable = node.getTargetVariableRef().getVariable()
 
             if not variable.isModuleVariable() and \
-               isSharedLogically(variable):
+               isSharedAmongScopes(variable):
                 SyntaxErrors.raiseSyntaxError(
                     reason       = """\
 can not delete variable '%s' referenced in nested scope""" % (
@@ -394,7 +362,7 @@ can not delete variable '%s' referenced in nested scope""" % (
                     display_line = not isFullCompat()
                 )
         elif node.isStatementsFrame():
-            node.updateVarNames()
+            node.updateLocalNames()
 
 
 def completeVariableClosures(tree):
@@ -407,14 +375,23 @@ def completeVariableClosures(tree):
     for visitor in visitors:
         visitTree(tree, visitor)
 
-        if tree.isPythonModule():
+        if tree.isCompiledPythonModule():
             for function in tree.getFunctions():
                 visitTree(function, visitor)
 
-    if tree.isPythonModule():
+    if tree.isCompiledPythonModule():
         for function in tree.getFunctions():
             addFunctionVariableReleases(function)
-    else:
-        # For "eval" code, this will need to be done differently, not done
-        # yet-
-        assert False
+
+            # Python3 is influenced by the mere use of a variable named as
+            # "super". So we need to prepare ability to take closure.
+            if function.hasFlag("has_super"):
+                if not function.hasVariableName("__class__"):
+                    class_var = function.getClosureVariable("__class__")
+                    function.registerProvidedVariable(class_var)
+                    addVariableUsage(class_var, function)
+
+                if not function.hasVariableName("self"):
+                    self_var = function.getClosureVariable("self")
+                    function.registerProvidedVariable(self_var)
+                    addVariableUsage(self_var, function)

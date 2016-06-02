@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -34,15 +34,33 @@ class VariableInformation:
     @counted_init
     def __init__(self, variable):
         self.variable = variable
+
         self.users = set()
+        self.active_users = set()
+
+    def __repr__(self):
+        return "<%s object for %s>" % (
+            self.__class__.__name__,
+            self.variable
+        )
 
     __del__ = counted_del()
 
     def addUser(self, user):
         self.users.add(user)
+        self.active_users.add(user)
+
+    def removeUser(self, user):
+        try:
+            self.active_users.remove(user)
+        except KeyError:
+            raise KeyError(self, user)
 
     def getUsers(self):
         return self.users
+
+    def getActiveUsers(self):
+        return self.active_users
 
     def getTopOwner(self):
         return self.variable.getOwner()
@@ -59,11 +77,31 @@ def addVariableUsage(variable, user):
     variable_info.addUser(user)
 
 
-# TODO: This seems practically unused and not needed.
-def isSharedLogically(variable):
+def removeVariableUsage(variable, user):
+    variable_info = variable_registry[variable]
+    variable_info.removeUser(user)
+
+
+def isSharedAmongScopes(variable):
     variable_info = variable_registry[variable]
 
-    return len(variable_info.users) > 1
+    if not variable.isParameterVariable():
+        return len(variable_info.users) > 1
+
+    count = 0
+
+    for user in variable_info.users:
+        if user.isExpressionGeneratorObjectBody() or \
+           user.isExpressionCoroutineObjectBody():
+            if variable.getOwner() is user.getParentVariableProvider():
+                continue
+
+        count += 1
+
+        if count > 1:
+            return True
+
+    return False
 
 
 def isSharedTechnically(variable):
@@ -71,18 +109,20 @@ def isSharedTechnically(variable):
 
     top_owner = variable_info.getTopOwner()
 
-    for user in variable_info.getUsers():
-        # May have been optimized away.
-        if variable not in user.getVariables():
-            continue
+    variable_name = variable.getName()
 
-        while user != top_owner and \
-              user.isExpressionFunctionBody() and \
-              not user.needsCreation() and \
-              not user.isGenerator():
+    for user in variable_info.getActiveUsers():
+        # May have been optimized away, but then this would be false.
+        assert user.hasVariableName(variable_name), (variable, user)
+
+        while user is not top_owner and \
+              (
+               (user.isExpressionFunctionBody() and not user.needsCreation()) or \
+               user.isExpressionClassBody()
+              ):
             user = user.getParentVariableProvider()
 
-        if user != top_owner:
+        if user is not top_owner:
             return True
 
     return False
@@ -95,21 +135,33 @@ class GlobalVariableTrace:
     @counted_init
     def __init__(self):
         self.traces = set()
+        self.writers = None
+        self.users = None
 
     __del__ = counted_del()
 
-    def add(self, variable_trace):
+    def addTrace(self, variable_trace):
         self.traces.add(variable_trace)
 
-    def remove(self, variable_trace):
+    def removeTrace(self, variable_trace):
         self.traces.remove(variable_trace)
 
-    def hasDefiniteWrites(self):
-        for trace in self.traces:
-            if trace.isAssignTrace():
-                return True
+    def updateUsageState(self):
+        writers = set()
+        users = set()
 
-        return False
+        for trace in self.traces:
+            owner = trace.owner
+            if trace.isAssignTrace():
+                writers.add(owner)
+
+            users.add(owner)
+
+        self.writers = writers
+        self.users = users
+
+    def hasDefiniteWrites(self):
+        return bool(self.writers)
 
     def getMatchingAssignTrace(self, assign_node):
         for trace in self.traces:
@@ -119,42 +171,81 @@ class GlobalVariableTrace:
         return None
 
     def hasWritesOutsideOf(self, provider):
-        for trace in self.traces:
-            if trace.isAssignTrace():
-                if trace.getAssignNode().getParentVariableProvider() is not provider:
-                    return True
+        if provider in self.writers:
+            return len(self.writers) > 1
+        else:
+            return bool(self.writers)
 
-        return False
-
+    def hasAccessesOutsideOf(self, provider):
+        if provider in self.users:
+            return len(self.users) > 1
+        else:
+            return bool(self.users)
 
 
 def updateFromCollection(old_collection, new_collection):
+    # After removing/adding traces, we need to pre-compute the users state
+    # information.
+    touched = set()
+
     if old_collection is not None:
         for variable_trace in old_collection.getVariableTracesAll().values():
             variable = variable_trace.getVariable()
 
-            variable_traces[variable].remove(variable_trace)
+            try:
+                global_trace = variable_traces[variable]
+            except KeyError:
+                global_trace = createGlobalVariableTrace(variable)
+                variable.setGlobalVariableTrace(global_trace)
+
+            global_trace.removeTrace(variable_trace)
+            touched.add(global_trace)
 
     if new_collection is not None:
         for variable_trace in new_collection.getVariableTracesAll().values():
             variable = variable_trace.getVariable()
+            try:
+                global_trace = variable_traces[variable]
+            except KeyError:
+                global_trace = createGlobalVariableTrace(variable)
+                variable.setGlobalVariableTrace(global_trace)
 
-            if variable not in variable_traces:
-                variable_traces[variable] = GlobalVariableTrace()
-
-            variable_traces[variable].add(variable_trace)
+            global_trace.addTrace(variable_trace)
+            touched.add(global_trace)
 
         # Release the memory, and prevent the "active" state from being ever
         # inspected, it's useless now.
         new_collection.variable_actives.clear()
         del new_collection.variable_actives
 
+    for global_trace in touched:
+        global_trace.updateUsageState()
+
+
 complete = False
 
-def getGlobalVariableTrace(variable):
-    # Global variable traces are not being handed out, before the first total
-    # run was completed.
-    if not complete:
-        return None
+def considerCompletion():
+    # Using global here, as this is really a about the singleton,
+    # pylint: disable=W0603
 
-    return variable_traces.get(variable, None)
+    global complete
+
+    # TODO: This is now only called once.
+    assert not complete
+
+    if not complete:
+        complete = True
+
+        # Monkey patch this, as this is now decided, pylint: disable=W0212
+        from nuitka.Variables import Variable
+        Variable.getGlobalVariableTrace = Variable._getGlobalVariableTrace
+
+        return True
+    else:
+        return False
+
+
+def createGlobalVariableTrace(variable):
+    result = GlobalVariableTrace()
+    variable_traces[variable] = result
+    return result

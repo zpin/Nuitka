@@ -14,6 +14,10 @@ Source2:        nuitka-rpmlintrc
 BuildRoot:      %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
 BuildRequires:  python
 BuildRequires:  python-devel
+%if 0%{?fedora} >= 22
+BuildRequires: python3-devel
+BuildRequires: python-tools
+%endif
 BuildRequires:  gcc-c++
 BuildRequires:  strace
 BuildRequires:  chrpath

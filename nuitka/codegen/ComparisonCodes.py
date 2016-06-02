@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -18,7 +18,7 @@
 """ Comparison related codes.
 
 Rich comparisons, "in", and "not in", also "is", and "is not", and the
-"isinstance" check as used in conditions.
+"isinstance" check as used in conditions, as well as exception matching.
 """
 
 from . import OperatorCodes
@@ -28,12 +28,35 @@ from .ErrorCodes import (
     getReleaseCode,
     getReleaseCodes
 )
+from .Helpers import generateExpressionCode
 from .LabelCodes import getBranchingCode
 
 
-def getComparisonExpressionCode(to_name, comparator, left_name, right_name,
-                                needs_check, emit, context):
+def generateComparisonExpressionCode(to_name, expression, emit, context):
+    left_name = context.allocateTempName("compexpr_left")
+    right_name = context.allocateTempName("compexpr_right")
+
+    generateExpressionCode(
+        to_name    = left_name,
+        expression = expression.getLeft(),
+        emit       = emit,
+        context    = context
+    )
+    generateExpressionCode(
+        to_name    = right_name,
+        expression = expression.getRight(),
+        emit       = emit,
+        context    = context
+    )
+
+    comparator  = expression.getComparator()
+
     if comparator in OperatorCodes.normal_comparison_codes:
+        needs_check = expression.getRight().mayRaiseExceptionIn(
+            BaseException,
+            expression.getLeft()
+        )
+
         helper = OperatorCodes.normal_comparison_codes[ comparator ]
         assert helper.startswith("SEQUENCE_CONTAINS")
 
@@ -64,6 +87,8 @@ def getComparisonExpressionCode(to_name, comparator, left_name, right_name,
             context     = context
         )
     elif comparator in OperatorCodes.rich_comparison_codes:
+        needs_check = expression.mayRaiseExceptionBool(BaseException)
+
         helper = "RICH_COMPARE_%s" % (
             OperatorCodes.rich_comparison_codes[ comparator ]
         )
@@ -123,6 +148,8 @@ def getComparisonExpressionCode(to_name, comparator, left_name, right_name,
             context       = context
         )
     elif comparator == "exception_match":
+        needs_check = expression.mayRaiseExceptionBool(BaseException)
+
         operator_res_name = context.allocateTempName(
             "cmp_exception_match",
             "int"

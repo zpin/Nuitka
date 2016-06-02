@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -60,6 +60,7 @@ recurse_all        = hasArg("recurse_all")
 timing             = hasArg("timing")
 coverage_mode      = hasArg("coverage")
 original_file      = hasArg("original_file")
+no_warnings        = not hasArg("warnings")
 
 plugins_enabled = []
 
@@ -73,6 +74,13 @@ plugins_disabled = []
 for count, arg in reversed(tuple(enumerate(args))):
     if arg.startswith("plugin_disable:"):
         plugins_disabled.append(arg[len("plugin_disable:"):])
+        del args[count]
+
+recurse_not = []
+
+for count, arg in reversed(tuple(enumerate(args))):
+    if arg.startswith("recurse_not:"):
+        recurse_not.append(arg[len("recurse_not:"):])
         del args[count]
 
 if args:
@@ -151,20 +159,36 @@ if two_step_execution:
     filename = os.path.abspath(filename)
 
 if module_mode:
-    cpython_cmd = [
-        os.environ["PYTHON"],
-        "-W", "ignore",
-        "-c", "import sys; sys.path.append(%s); import %s" % (
-            repr(os.path.dirname(filename)),
-            os.path.basename(filename)
-        )
-    ]
+    if no_warnings:
+        cpython_cmd = [
+            os.environ["PYTHON"],
+            "-W", "ignore",
+            "-c", "import sys; sys.path.append(%s); import %s" % (
+                repr(os.path.dirname(filename)),
+                os.path.basename(filename)
+            )
+        ]
+    else:
+        cpython_cmd = [
+            os.environ["PYTHON"],
+            "-c", "import sys; sys.path.append(%s); import %s" % (
+                repr(os.path.dirname(filename)),
+                os.path.basename(filename)
+            )
+        ]
+
 else:
-    cpython_cmd = [
-        os.environ["PYTHON"],
-        "-W", "ignore",
-        filename
-    ]
+    if no_warnings:
+        cpython_cmd = [
+            os.environ["PYTHON"],
+            "-W", "ignore",
+            filename
+        ]
+    else:
+        cpython_cmd = [
+            os.environ["PYTHON"],
+            filename
+        ]
 
 if no_site:
     cpython_cmd.insert(1, "-S")
@@ -197,6 +221,9 @@ else:
 
 if python_debug:
     extra_options.append("--python-debug")
+
+if no_warnings:
+    extra_options.append("--python-flag=no_warnings")
 
 if remove_output:
     extra_options.append("--remove-output")
@@ -236,6 +263,9 @@ if recurse_none:
 if recurse_all:
     extra_options.append("--recurse-all")
 
+if recurse_not:
+    extra_options.extend("--recurse-not-to=" + v for v in recurse_not)
+
 if coverage_mode:
     extra_options.append("--must-not-re-execute")
     extra_options.append("--generate-c++-only")
@@ -250,13 +280,13 @@ for plugin_disabled in plugins_disabled:
 if not two_step_execution:
     if module_mode:
         nuitka_cmd = nuitka_call + extra_options + \
-          ["--execute", "--python-flag=no_warnings", "--module", filename]
+          ["--execute", "--module", filename]
     elif standalone_mode:
         nuitka_cmd = nuitka_call + extra_options + \
-          ["--execute", "--python-flag=no_warnings", "--standalone", filename]
+          ["--execute", "--standalone", filename]
     else:
         nuitka_cmd = nuitka_call + extra_options + \
-          ["--execute", "--python-flag=no_warnings", filename]
+          ["--execute", filename]
 
     if no_site:
         nuitka_cmd.insert(len(nuitka_cmd) - 1, "--python-flag=-S")
@@ -264,13 +294,13 @@ if not two_step_execution:
 else:
     if module_mode:
         nuitka_cmd1 = nuitka_call + extra_options + \
-          ["--python-flag=no_warnings", "--module", os.path.abspath(filename)]
+          ["--module", os.path.abspath(filename)]
     elif standalone_mode:
         nuitka_cmd1 = nuitka_call + extra_options + \
-          ["--python-flag=no_warnings", "--standalone", filename]
+          ["--standalone", filename]
     else:
         nuitka_cmd1 = nuitka_call + extra_options + \
-          ["--python-flag=no_warnings", filename]
+          [filename]
 
     if no_site:
         nuitka_cmd1.insert(len(nuitka_cmd1) - 1, "--python-flag=-S")
@@ -420,20 +450,10 @@ if not silent_mode:
         assert not stdout_nuitka
         assert not stderr_nuitka
 
-ran_tests_re                 = re.compile(r"^(Ran \d+ tests? in )\d+\.\d+s$")
-instance_re                  = re.compile(r"at (?:0x)?[0-9a-fA-F]+(\s|\>)")
+ran_tests_re                 = re.compile(r"^(Ran \d+ tests? in )\-?\d+\.\d+s$")
+instance_re                  = re.compile(r"at (?:0x)?[0-9a-fA-F]+(;?\s|\>)")
 thread_re                    = re.compile(r"Thread 0x[0-9a-fA-F]+")
-compiled_function_re         = re.compile(r"\<compiled function")
-compiled_frame_re            = re.compile(r"\<compiled_frame")
-compiled_genexpr_re          = re.compile(
-    r"\<compiled generator object \<(.*?)\>"
-)
-compiled_generator_re        = re.compile(
-    r"\<compiled generator object (.*?) at"
-)
-unbound_method_re            = re.compile(r"bound compiled_method ")
-compiled_type_re             = re.compile(r"type 'compiled_")
-compiled_generator_object_re = re.compile(r"'compiled_generator' object")
+compiled_types_re            = re.compile(r"compiled_(module|function|generator|method|frame|coroutine)")
 module_repr_re               = re.compile(r"(\<module '.*?' from ').*?('\>)")
 
 global_name_error_re         = re.compile(
@@ -452,6 +472,10 @@ local_port_re = re.compile(
 
 traceback_re                 = re.compile(
     r'(F|f)ile "(.*?)", line (\d+)'
+)
+
+tempfile_re                  = re.compile(
+    r'/tmp/tmp[a-z0-9_]*'
 )
 
 def traceback_re_callback(match):
@@ -498,38 +522,13 @@ def makeDiffable(output):
 
         line = instance_re.sub(r"at 0xxxxxxxxx\1", line)
         line = thread_re.sub(r"Thread 0xXXXXXXXX", line)
-        line = compiled_function_re.sub(r"<function", line)
-        line = compiled_frame_re.sub(r"<frame", line)
-        line = compiled_genexpr_re.sub(r"<generator object <\1>", line)
-        line = compiled_generator_re.sub(r"<generator object \1 at", line)
-        line = unbound_method_re.sub(r"bound method ", line)
-        line = compiled_type_re.sub(r"type '", line)
-        line = compiled_generator_object_re.sub(r"'generator' object", line)
+        line = compiled_types_re.sub(r"\1", line)
         line = global_name_error_re.sub(r"\1\2\3", line)
         line = module_repr_re.sub(r"\1xxxxx\2", line)
-        line = line.replace("'compiled_module'", "'module'")
-        line = line.replace("'compiled_function'", "'function'")
         line = non_ascii_error_rt.sub(r"\1 xxxx", line)
 
         # Windows has a different "os.path", update according to it.
         line = line.replace("ntpath", "posixpath")
-
-        line = line.replace(
-            "must be a mapping, not compiled_function",
-            "must be a mapping, not function"
-        )
-        line = line.replace(
-            "must be a sequence, not compiled_function",
-            "must be a sequence, not function"
-        )
-        line = line.replace(
-            "compiled_function object is not an iterator",
-            "function object is not an iterator"
-        )
-        line = line.replace(
-            "AttributeError: 'compiled_frame' object has no attribute 'clear'",
-            "AttributeError: 'frame' object has no attribute 'clear'",
-        )
 
         # This URL is updated, and Nuitka outputs the new one, but we test
         # against versions that don't have that.
@@ -541,6 +540,9 @@ def makeDiffable(output):
         line = ran_tests_re.sub(r"\1x.xxxs", line)
 
         line = traceback_re.sub(traceback_re_callback, line)
+
+        line = tempfile_re.sub(r"/tmp/tmpxxxxxxx", line)
+
         # This is a bug potentially, occurs only for CPython when re-directed,
         # we are going to ignore the issue as Nuitka is fine.
         if line == "Exception RuntimeError: 'maximum recursion depth exceeded while calling a Python object' in <type 'exceptions.AttributeError'> ignored":
@@ -548,7 +550,7 @@ def makeDiffable(output):
 
         # This is also a bug potentially, but only visible under
         # CPython
-        line = python_win_lib_re.sub(r"C:\Python\1Lib", line)
+        line = python_win_lib_re.sub(r"C:\\Python\1Lib", line)
 
         # Port numbers can be random, lets ignore them
         line = local_port_re.sub(r"\1:xxxxx", line)

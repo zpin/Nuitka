@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -26,13 +26,13 @@ from nuitka import Options, Tracing, TreeXML, Variables
 from nuitka.__past__ import iterItems
 from nuitka.Constants import isCompileTimeConstantValue
 from nuitka.containers.odict import OrderedDict
-from nuitka.containers.oset import OrderedSet
 from nuitka.PythonVersions import python_version
 from nuitka.utils.InstanceCounters import counted_del, counted_init
-from nuitka.VariableRegistry import addVariableUsage
+from nuitka.VariableRegistry import addVariableUsage, removeVariableUsage
 
 from .NodeMakingHelpers import (
     getComputationResult,
+    makeStatementOnlyNodesFromExpressions,
     wrapExpressionWithSideEffects
 )
 
@@ -180,32 +180,11 @@ class NodeBase(NodeMetaClassBase):
 
         """
 
-        if self.parent is None and not self.isPythonModule():
+        if self.parent is None and not self.isCompiledPythonModule():
             # print self.getVisitableNodesNamed()
             assert False, (self,  self.source_ref)
 
         return self.parent
-
-    def getParents(self):
-        """ Parents of the node. Up to module level.
-
-        """
-        result = []
-        current = self
-
-        while True:
-            current = current.getParent()
-
-            result.append(current)
-
-            if current.isPythonModule() or current.isExpressionFunctionBody():
-                break
-
-        assert None not in result, self
-
-        result.reverse()
-        return result
-
     def getChildName(self):
         """ Return the role in the current parent, subject to changes.
 
@@ -238,7 +217,7 @@ class NodeBase(NodeMetaClassBase):
 
         parent = self.getParent()
 
-        while parent is not None and not parent.isExpressionFunctionBody():
+        while parent is not None and not parent.isExpressionFunctionBodyBase():
             parent = parent.getParent()
 
         return parent
@@ -249,7 +228,7 @@ class NodeBase(NodeMetaClassBase):
         """
         parent = self
 
-        while not parent.isPythonModule():
+        while not parent.isCompiledPythonModule():
             if hasattr(parent, "provider"):
                 # After we checked, we can use it, will be much faster route
                 # to take.
@@ -383,7 +362,7 @@ class NodeBase(NodeMetaClassBase):
         Tracing.printSeparator(level)
 
     @staticmethod
-    def isPythonModule():
+    def isCompiledPythonModule():
         # For overload by module nodes
         return False
 
@@ -485,6 +464,12 @@ class NodeBase(NodeMetaClassBase):
 
         return True
 
+    def mayRaiseExceptionIn(self, exception_type, checked_value):
+        """ Unless we are told otherwise, everything may raise being iterated. """
+        # Virtual method, pylint: disable=R0201,W0613
+
+        return True
+
     def mayRaiseExceptionAttributeLookup(self, exception_type, attribute_name):
         """ Unless we are told otherwise, everything may raise for attribute access. """
         # Virtual method, pylint: disable=R0201,W0613
@@ -576,7 +561,10 @@ class CodeNodeBase(NodeBase):
     def __init__(self, name, code_prefix, source_ref):
         assert name is not None
 
-        NodeBase.__init__(self, source_ref = source_ref)
+        NodeBase.__init__(
+            self,
+            source_ref = source_ref
+        )
 
         self.name = name
         self.code_prefix = code_prefix
@@ -620,7 +608,7 @@ class CodeNodeBase(NodeBase):
             assert isinstance(self, CodeNodeBase)
 
             if self.name:
-                name = uid + '_' + self.name
+                name = uid + '_' + self.name.strip("<>")
             else:
                 name = uid
 
@@ -630,11 +618,11 @@ class CodeNodeBase(NodeBase):
 
     def getChildUID(self, node):
         if node.kind not in self.uids:
-            self.uids[ node.kind ] = 0
+            self.uids[node.kind] = 0
 
-        self.uids[ node.kind ] += 1
+        self.uids[node.kind] += 1
 
-        return self.uids[ node.kind ]
+        return self.uids[node.kind]
 
 
 class ChildrenHavingMixin:
@@ -834,7 +822,6 @@ class ChildrenHavingMixin:
 
             raise
 
-
         effective_source_ref = self.getCompatibleSourceReference()
 
         if effective_source_ref is not self.source_ref:
@@ -854,8 +841,6 @@ class ClosureGiverNodeBase(CodeNodeBase):
         )
 
         self.providing = OrderedDict()
-
-        self.keeper_variables = OrderedSet()
 
         self.temp_variables = OrderedDict()
 
@@ -920,8 +905,7 @@ class ClosureGiverNodeBase(CodeNodeBase):
 
             full_name = name
 
-        del name
-
+        # No duplicates please.
         assert full_name not in self.temp_variables, full_name
 
         result = Variables.TempVariable(
@@ -948,6 +932,8 @@ class ClosureGiverNodeBase(CodeNodeBase):
 
     def removeTempVariable(self, variable):
         del self.temp_variables[variable.getName()]
+
+        removeVariableUsage(variable, self)
 
     def allocatePreserverId(self):
         if python_version >= 300:
@@ -1089,6 +1075,22 @@ class ExpressionMixin:
 
         # Virtual method, pylint: disable=R0201
         return None
+
+    def getIterationMinLength(self):
+        """ Value that "len" or "PyObject_Size" would give at minimum, if known.
+
+            Otherwise it is "None" to indicate unknown.
+        """
+
+        return self.getIterationLength()
+
+    def getIterationMaxLength(self):
+        """ Value that "len" or "PyObject_Size" would give at maximum, if known.
+
+            Otherwise it is "None" to indicate unknown.
+        """
+
+        return self.getIterationLength()
 
     def getStringValue(self):
         """ Node as string value, if possible."""
@@ -1241,27 +1243,21 @@ class ExpressionMixin:
 
     def computeExpressionSubscript(self, lookup_node, subscript,
                                    constraint_collection):
-        # By default, an subscript may change everything about the lookup
-        # source.
-        constraint_collection.removeKnowledge(self)
-        constraint_collection.removeKnowledge(subscript)
-
-        # Any code could be run, note that.
+        # By default, an subscript can execute any code and change all values
+        # that escaped. This is a virtual method that may consider the subscript
+        # but generally we don't know what to do. pylint: disable=W0613
         constraint_collection.onControlFlowEscape(self)
 
+        # Any exception may be raised.
         constraint_collection.onExceptionRaiseExit(BaseException)
 
         return lookup_node, None, None
 
     def computeExpressionSetSubscript(self, set_node, subscript, value_node,
                                       constraint_collection):
-        # By default, an subscript may change everything about the lookup
-        # source.
-        constraint_collection.removeKnowledge(self)
-        constraint_collection.removeKnowledge(subscript)
-        constraint_collection.removeKnowledge(value_node)
-
-        # Any code could be run, note that.
+        # By default, an subscript can execute any code and change all values
+        # that escaped. This is a virtual method that may consider the subscript
+        # but generally we don't know what to do. pylint: disable=W0613
         constraint_collection.onControlFlowEscape(self)
 
         # Any exception may be raised.
@@ -1269,20 +1265,17 @@ class ExpressionMixin:
 
         return set_node, None, None
 
-    def computeExpressionDelSubscript(self, set_node, subscript,
+    def computeExpressionDelSubscript(self, del_node, subscript,
                                       constraint_collection):
-        # By default, an subscript may change everything about the lookup
-        # source.
-        constraint_collection.removeKnowledge(self)
-        constraint_collection.removeKnowledge(subscript)
-
-        # Any code could be run, note that.
+        # By default, an subscript can execute any code and change all values
+        # that escaped. This is a virtual method that may consider the subscript
+        # but generally we don't know what to do. pylint: disable=W0613
         constraint_collection.onControlFlowEscape(self)
 
         # Any exception may be raised.
         constraint_collection.onExceptionRaiseExit(BaseException)
 
-        return set_node, None, None
+        return del_node, None, None
 
     def computeExpressionSlice(self, lookup_node, lower, upper,
                                constraint_collection):
@@ -1357,6 +1350,17 @@ class ExpressionMixin:
 
         return iter_node, None, None
 
+    def computeExpressionAsyncIter(self, iter_node, constraint_collection):
+        self.onContentEscapes(constraint_collection)
+
+        # Any code could be run, note that.
+        constraint_collection.onControlFlowEscape(self)
+
+        # Any exception may be raised.
+        constraint_collection.onExceptionRaiseExit(BaseException)
+
+        return iter_node, None, None
+
     def computeExpressionOperationNot(self, not_node, constraint_collection):
         # Virtual method, pylint: disable=R0201
 
@@ -1371,6 +1375,17 @@ class ExpressionMixin:
 
         return not_node, None, None
 
+    def computeExpressionComparisonIn(self, in_node, value_node, constraint_collection):
+        # Virtual method, pylint: disable=R0201,W0613
+
+        # Any code could be run, note that.
+        constraint_collection.onControlFlowEscape(in_node)
+
+        # Any exception may be raised.
+        constraint_collection.onExceptionRaiseExit(BaseException)
+
+        return in_node, None, None
+
     def computeExpressionDrop(self, statement, constraint_collection):
         if not self.mayHaveSideEffects():
             return None, "new_statements", "Removed statement without effect."
@@ -1380,6 +1395,9 @@ class ExpressionMixin:
     def onContentEscapes(self, constraint_collection):
         pass
 
+    def hasShapeDictionaryExact(self):
+        # Virtual method, pylint: disable=R0201
+        return False
 
 
 class CompileTimeConstantExpressionMixin(ExpressionMixin):
@@ -1537,6 +1555,23 @@ Slicing of constant with constant upper index only."""
 
         return lookup_node, None, None
 
+    def computeExpressionComparisonIn(self, in_node, value_node, constraint_collection):
+        if value_node.isCompileTimeConstant():
+            return getComputationResult(
+                node        = in_node,
+                computation = lambda : in_node.getSimulator()(
+                    value_node.getCompileTimeConstant(),
+                    self.getCompileTimeConstant()
+                ),
+                description = """\
+Predicted '%s' on compiled time constant values.""" % in_node.comparator
+            )
+
+        # Look-up of __contains__ on compile time constants does mostly nothing.
+        constraint_collection.onExceptionRaiseExit(BaseException)
+
+        return in_node, None, None
+
 
 class ExpressionSpecBasedComputationMixin(ExpressionMixin):
     builtin_spec = None
@@ -1586,13 +1621,15 @@ class StatementChildrenHavingBase(ChildrenHavingMixin, NodeBase):
             values = values
         )
 
-    def computeStatementSubExpressions(self, constraint_collection, expressions):
+    def computeStatementSubExpressions(self, constraint_collection):
         """ Compute a statement.
 
             Default behavior is to just visit the child expressions first, and
             then the node "computeStatement". For a few cases this needs to
             be overloaded.
         """
+        expressions = self.getVisitableNodes()
+
         for count, expression in enumerate(expressions):
             assert expression.isExpression(), (self, expression)
 
@@ -1601,22 +1638,26 @@ class StatementChildrenHavingBase(ChildrenHavingMixin, NodeBase):
             )
 
             if expression.willRaiseException(BaseException):
-                wrapped_expression = wrapExpressionWithSideEffects(
-                    side_effects = expressions[:count],
-                    old_node     = expression,
-                    new_node     = expression
+                wrapped_expression = makeStatementOnlyNodesFromExpressions(
+                    expressions[:count+1]
                 )
+
+                assert wrapped_expression is not None
 
                 return (
                     wrapped_expression,
                     "new_raise",
-                    "For '%s' the expression '%s' will raise." % (
-                        self.getChildNameNice(),
+                    lambda : "For %s the expression '%s' will raise." % (
+                        self.getStatementNiceName(),
                         expression.getChildNameNice()
                     )
                 )
 
         return self, None, None
+
+    def getStatementNiceName(self):
+        # Virtual method, pylint: disable=R0201
+        return "undescribed statement"
 
 
 class ExpressionBuiltinNoArgBase(NodeBase, ExpressionMixin):

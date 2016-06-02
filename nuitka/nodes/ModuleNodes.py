@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -31,10 +31,12 @@ from nuitka.importing.Importing import (
 )
 from nuitka.importing.Recursion import decideRecursion, recurseTo
 from nuitka.optimizations.TraceCollections import ConstraintCollectionModule
-from nuitka.SourceCodeReferences import SourceCodeReference
+from nuitka.PythonVersions import python_version
+from nuitka.SourceCodeReferences import SourceCodeReference, fromFilename
 from nuitka.utils import Utils
 
 from .Checkers import checkStatementsSequenceOrNone
+from .CodeObjectSpecs import CodeObjectSpec
 from .ConstantRefNodes import ExpressionConstantRef
 from .FutureSpecs import FutureSpec
 from .NodeBases import (
@@ -85,16 +87,18 @@ class PythonModuleMixin:
         if self.package_name is not None and self.package is None:
             package_package, package_filename, _finding = findModule(
                 importing      = self,
-                source_ref     = self.getSourceReference(),
                 module_name    = self.package_name,
                 parent_package = None,
                 level          = 1,
-                warn           = Utils.python_version < 330
+                warn           = python_version < 330
             )
 
             # TODO: Temporary, if we can't find the package for Python3.3 that
             # is semi-OK, maybe.
-            if Utils.python_version >= 330 and not package_filename:
+            if python_version >= 330 and not package_filename:
+                return []
+
+            if self.package_name == "uniconvertor.app.modules":
                 return []
 
             assert package_filename is not None, self.package_name
@@ -156,7 +160,7 @@ class PythonModuleMixin:
             current = filename
 
             levels = full_name.count('.')
-            if self.isPythonPackage():
+            if self.isCompiledPythonPackage():
                 levels += 1
 
             for _i in range(levels):
@@ -166,15 +170,13 @@ class PythonModuleMixin:
             return result
 
 
-class PythonModule(PythonModuleMixin, ChildrenHavingMixin,
-                   ClosureGiverNodeBase):
-    """ Module
+class CompiledPythonModule(PythonModuleMixin, ChildrenHavingMixin,
+                           ClosureGiverNodeBase):
+    """ Compiled Python Module
 
-        The module is the only possible root of a tree. When there are many
-        modules they form a forest.
     """
 
-    kind = "PYTHON_MODULE"
+    kind = "COMPILED_PYTHON_MODULE"
 
     named_children = (
         "body",
@@ -184,7 +186,7 @@ class PythonModule(PythonModuleMixin, ChildrenHavingMixin,
         "body": checkStatementsSequenceOrNone
     }
 
-    def __init__(self, name, package_name, source_ref):
+    def __init__(self, name, package_name, mode, source_ref):
         ClosureGiverNodeBase.__init__(
             self,
             name        = name,
@@ -198,7 +200,6 @@ class PythonModule(PythonModuleMixin, ChildrenHavingMixin,
             package_name = package_name
         )
 
-
         ChildrenHavingMixin.__init__(
             self,
             values = {
@@ -206,7 +207,9 @@ class PythonModule(PythonModuleMixin, ChildrenHavingMixin,
             },
         )
 
-        self.variables = set()
+        self.mode = mode
+
+        self.variables = {}
 
         # The list functions contained in that module.
         self.functions = OrderedSet()
@@ -217,6 +220,18 @@ class PythonModule(PythonModuleMixin, ChildrenHavingMixin,
         # SSA trace based information about the module.
         self.constraint_collection = None
 
+        self.code_object = CodeObjectSpec(
+            code_name     = "<module>" if self.isMainModule() else self.getName(),
+            code_kind     = "Module",
+            arg_names     = (),
+            kw_only_count = 0,
+            has_stardict  = False,
+            has_starlist  = False,
+        )
+
+    def getCodeObject(self):
+        return self.code_object
+
     def getDetails(self):
         return {
             "filename" : self.source_ref.getFilename(),
@@ -225,7 +240,7 @@ class PythonModule(PythonModuleMixin, ChildrenHavingMixin,
         }
 
     def asXml(self):
-        result = super(PythonModule, self).asXml()
+        result = super(CompiledPythonModule, self).asXml()
 
         for function_body in self.active_functions:
             result.append(function_body.asXml())
@@ -278,7 +293,7 @@ class PythonModule(PythonModuleMixin, ChildrenHavingMixin,
     setBody = ChildrenHavingMixin.childSetter("body")
 
     @staticmethod
-    def isPythonModule():
+    def isCompiledPythonModule():
         return True
 
     def getParent(self):
@@ -287,8 +302,11 @@ class PythonModule(PythonModuleMixin, ChildrenHavingMixin,
     def getParentVariableProvider(self):
         return None
 
+    def hasVariableName(self, variable_name):
+        return variable_name in self.variables or variable_name in self.temp_variables
+
     def getVariables(self):
-        return self.variables
+        return self.variables.values()
 
     def getFilename(self):
         return self.source_ref.getFilename()
@@ -305,13 +323,14 @@ class PythonModule(PythonModuleMixin, ChildrenHavingMixin,
         )
 
     def createProvidedVariable(self, variable_name):
+        assert variable_name not in self.variables
+
         result = Variables.ModuleVariable(
             module        = self,
             variable_name = variable_name
         )
 
-        assert result not in self.variables
-        self.variables.add(result)
+        self.variables[variable_name] = result
 
         return result
 
@@ -352,7 +371,10 @@ class PythonModule(PythonModuleMixin, ChildrenHavingMixin,
     def addUsedFunction(self, function_body):
         assert function_body in self.functions
 
-        assert function_body.isExpressionFunctionBody()
+        assert function_body.isExpressionFunctionBody() or \
+               function_body.isExpressionClassBody() or \
+               function_body.isExpressionGeneratorObjectBody() or \
+               function_body.isExpressionCoroutineObjectBody()
 
         if function_body not in self.active_functions:
             self.active_functions.add(function_body)
@@ -393,7 +415,7 @@ class PythonModule(PythonModuleMixin, ChildrenHavingMixin,
     def computeModule(self):
         old_collection = self.constraint_collection
 
-        self.constraint_collection = ConstraintCollectionModule()
+        self.constraint_collection = ConstraintCollectionModule(self)
 
         module_body = self.getBody()
 
@@ -416,19 +438,119 @@ class PythonModule(PythonModuleMixin, ChildrenHavingMixin,
 
         self.constraint_collection.updateFromCollection(old_collection)
 
-
     def getTraceCollections(self):
         yield self.constraint_collection
 
         for function in self.getUsedFunctions():
             yield function.constraint_collection
 
-    def hasUnclearLocals(self):
-        for collection in self.getTraceCollections():
-            if collection.hasUnclearLocals():
-                return True
 
-        return False
+class CompiledPythonPackage(CompiledPythonModule):
+    kind = "COMPILED_PYTHON_PACKAGE"
+
+    def __init__(self, name, package_name, mode, source_ref):
+        assert name
+
+        CompiledPythonModule.__init__(
+            self,
+            name         = name,
+            package_name = package_name,
+            mode         = mode,
+            source_ref   = source_ref
+        )
+
+    def getOutputFilename(self):
+        return Utils.dirname(self.getFilename())
+
+
+def makeUncompiledPythonModule(module_name, filename, bytecode, is_package,
+                               user_provided, technical):
+    parts = module_name.rsplit('.', 1)
+    name = parts[-1]
+
+    package_name = parts[0] if len(parts) == 2 else None
+    source_ref = fromFilename(filename)
+
+    if is_package:
+        return UncompiledPythonPackage(
+            name          = name,
+            package_name  = package_name,
+            bytecode      = bytecode,
+            filename      = filename,
+            user_provided = user_provided,
+            technical     = technical,
+            source_ref    = source_ref
+        )
+    else:
+        return UncompiledPythonModule(
+            name          = name,
+            package_name  = package_name,
+            bytecode      = bytecode,
+            filename      = filename,
+            user_provided = user_provided,
+            technical     = technical,
+            source_ref    = source_ref
+        )
+
+
+class UncompiledPythonModule(PythonModuleMixin, NodeBase):
+    """ Compiled Python Module
+
+    """
+
+    kind = "UNCOMPILED_PYTHON_MODULE"
+
+    def __init__(self, name, package_name, bytecode, filename, user_provided,
+                 technical, source_ref):
+        NodeBase.__init__(
+            self,
+            source_ref = source_ref
+        )
+
+        PythonModuleMixin.__init__(
+            self,
+            name         = name,
+            package_name = package_name
+        )
+
+        self.bytecode = bytecode
+        self.filename = filename
+
+        self.user_provided = user_provided
+        self.technical = technical
+
+        self.used_modules = ()
+
+    @staticmethod
+    def isUncompiledPythonModule():
+        return True
+
+    def isUserProvided(self):
+        return self.user_provided
+
+    def isTechnical(self):
+        """ Must be bytecode as it's used in CPython library initialization. """
+        return self.technical
+
+    def getByteCode(self):
+        return self.bytecode
+
+    def getFilename(self):
+        return self.filename
+
+    def getUsedModules(self):
+        return self.used_modules
+
+    def setUsedModules(self, used_modules):
+        self.used_modules = used_modules
+
+    def startTraversal(self):
+        pass
+
+
+class UncompiledPythonPackage(UncompiledPythonModule):
+    kind = "UNCOMPILED_PYTHON_PACKAGE"
+
 
 class SingleCreationMixin:
     created = set()
@@ -438,14 +560,15 @@ class SingleCreationMixin:
         self.created.add(self.__class__)
 
 
-class PythonMainModule(PythonModule, SingleCreationMixin):
+class PythonMainModule(CompiledPythonModule, SingleCreationMixin):
     kind = "PYTHON_MAIN_MODULE"
 
-    def __init__(self, main_added, source_ref):
-        PythonModule.__init__(
+    def __init__(self, main_added, mode, source_ref):
+        CompiledPythonModule.__init__(
             self,
             name         = "__main__",
             package_name = None,
+            mode         = mode,
             source_ref   = source_ref
         )
 
@@ -461,17 +584,18 @@ class PythonMainModule(PythonModule, SingleCreationMixin):
         if self.main_added:
             return Utils.dirname(self.getFilename())
         else:
-            return PythonModule.getOutputFilename(self)
+            return CompiledPythonModule.getOutputFilename(self)
 
 
-class PythonInternalModule(PythonModule, SingleCreationMixin):
+class PythonInternalModule(CompiledPythonModule, SingleCreationMixin):
     kind = "PYTHON_INTERNAL_MODULE"
 
     def __init__(self):
-        PythonModule.__init__(
+        CompiledPythonModule.__init__(
             self,
             name         = "__internal__",
             package_name = None,
+            mode         = "compiled",
             source_ref   = SourceCodeReference.fromFilenameAndLine(
                 filename    = "internal",
                 line        = 0,
@@ -489,25 +613,10 @@ class PythonInternalModule(PythonModule, SingleCreationMixin):
         return "__internal"
 
 
-class PythonPackage(PythonModule):
-    kind = "PYTHON_PACKAGE"
-
-    def __init__(self, name, package_name, source_ref):
-        assert name
-
-        PythonModule.__init__(
-            self,
-            name         = name,
-            package_name = package_name,
-            source_ref   = source_ref
-        )
-
-    def getOutputFilename(self):
-        return Utils.dirname(self.getFilename())
-
-
 class PythonShlibModule(PythonModuleMixin, NodeBase):
     kind = "PYTHON_SHLIB_MODULE"
+
+    avoid_duplicates = set()
 
     def __init__(self, name, package_name, source_ref):
         NodeBase.__init__(
@@ -521,10 +630,16 @@ class PythonShlibModule(PythonModuleMixin, NodeBase):
             package_name = package_name
         )
 
+        # That would be a mistake we just made.
         assert Utils.basename(source_ref.getFilename()) != "<frozen>"
 
         # That is too likely a bug.
         assert name != "__main__"
+
+        # Duplicates should be avoided by us caching elsewhere before creating
+        # the object.
+        assert self.getFullName() not in self.avoid_duplicates, self.getFullName()
+        self.avoid_duplicates.add(self.getFullName())
 
     def getDetails(self):
         return {
@@ -537,7 +652,6 @@ class PythonShlibModule(PythonModuleMixin, NodeBase):
 
     def startTraversal(self):
         pass
-
 
 
 class ExpressionModuleFileAttributeRef(NodeBase, ExpressionMixin):

@@ -1,4 +1,4 @@
-//     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+//     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 //
 //     Part of "Nuitka", an optimizing Python compiler that is compatible and
 //     integrates with CPython, but also works on its own.
@@ -27,7 +27,7 @@
 #endif
 
 #if PYTHON_VERSION >= 300
-static void CHAIN_EXCEPTION( PyObject *exception_type, PyObject *exception_value )
+static void CHAIN_EXCEPTION( PyObject *exception_value )
 {
     // Implicit chain of exception already existing.
     PyThreadState *thread_state = PyThreadState_GET();
@@ -110,7 +110,7 @@ NUITKA_MAY_BE_UNUSED static void RAISE_EXCEPTION_WITH_TYPE( PyObject **exception
 #endif
 
 #if PYTHON_VERSION >= 300
-        CHAIN_EXCEPTION( *exception_type, *exception_value );
+        CHAIN_EXCEPTION( *exception_value );
 #endif
         return;
     }
@@ -121,7 +121,7 @@ NUITKA_MAY_BE_UNUSED static void RAISE_EXCEPTION_WITH_TYPE( PyObject **exception
         Py_INCREF( *exception_type );
 
 #if PYTHON_VERSION >= 300
-        CHAIN_EXCEPTION( *exception_type, *exception_value );
+        CHAIN_EXCEPTION( *exception_value );
 
         // TODO: Ever true?
         if ( *exception_tb )
@@ -157,7 +157,6 @@ NUITKA_MAY_BE_UNUSED static void RAISE_EXCEPTION_WITH_CAUSE( PyObject **exceptio
 {
     CHECK_OBJECT( *exception_type );
     CHECK_OBJECT( exception_cause );
-    *exception_value = NULL;
     *exception_tb = NULL;
 
 #if PYTHON_VERSION >= 330
@@ -196,8 +195,11 @@ NUITKA_MAY_BE_UNUSED static void RAISE_EXCEPTION_WITH_CAUSE( PyObject **exceptio
         Py_XDECREF( *exception_tb );
         Py_XDECREF( exception_cause );
 
+#ifdef _NUITKA_FULL_COMPAT
         PyErr_Format( PyExc_TypeError, "exception causes must derive from BaseException" );
-
+#else
+        PyErr_Format( PyExc_TypeError, "exception causes must derive from BaseException (%s does not)", Py_TYPE( exception_cause )->tp_name );
+#endif
         FETCH_ERROR_OCCURRED( exception_type, exception_value, exception_tb );
         return;
     }
@@ -227,7 +229,7 @@ NUITKA_MAY_BE_UNUSED static void RAISE_EXCEPTION_WITH_CAUSE( PyObject **exceptio
         PyException_SetCause( *exception_value, exception_cause );
 
 #if PYTHON_VERSION >= 300
-        CHAIN_EXCEPTION( *exception_type, *exception_value );
+        CHAIN_EXCEPTION( *exception_value );
 #endif
         return;
     }
@@ -240,7 +242,7 @@ NUITKA_MAY_BE_UNUSED static void RAISE_EXCEPTION_WITH_CAUSE( PyObject **exceptio
         PyException_SetCause( *exception_value, exception_cause );
 
 #if PYTHON_VERSION >= 300
-        CHAIN_EXCEPTION( *exception_type, *exception_value );
+        CHAIN_EXCEPTION( *exception_value );
 #endif
 
         return;
@@ -342,7 +344,7 @@ NUITKA_MAY_BE_UNUSED static void RAISE_EXCEPTION_IMPLICIT( PyObject **exception_
     {
 #if PYTHON_VERSION >= 340
         NORMALIZE_EXCEPTION( exception_type, exception_value, exception_tb );
-        CHAIN_EXCEPTION( *exception_type, *exception_value );
+        CHAIN_EXCEPTION( *exception_value );
 #endif
 
         return;
@@ -350,7 +352,7 @@ NUITKA_MAY_BE_UNUSED static void RAISE_EXCEPTION_IMPLICIT( PyObject **exception_
     else if ( PyExceptionInstance_Check( *exception_type ) )
     {
 #if PYTHON_VERSION >= 340
-        CHAIN_EXCEPTION( *exception_type, *exception_value );
+        CHAIN_EXCEPTION( *exception_value );
 #endif
 
         // The type is rather a value, so we are overriding it here.
@@ -366,7 +368,7 @@ NUITKA_MAY_BE_UNUSED static void RAISE_EXCEPTION_IMPLICIT( PyObject **exception_
         FETCH_ERROR_OCCURRED( exception_type, exception_value, exception_tb );
 
 #if PYTHON_VERSION >= 340
-        CHAIN_EXCEPTION( *exception_type, *exception_value );
+        CHAIN_EXCEPTION( *exception_value );
 #endif
 
         return;

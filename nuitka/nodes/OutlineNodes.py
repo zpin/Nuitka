@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -17,13 +17,11 @@
 #
 """ Outline nodes.
 
-We use them for re-formulations and for inlining of code. They are expressions
+We use them for re-formulations and for in-lining of code. They are expressions
 that get their value from return statements in their code body. They do not
 own anything by themselves. It's just a way of having try/finally for the
-expressions.
+expressions, or multiple returns, without running in a too different context.
 """
-
-
 
 from .NodeBases import ChildrenHavingMixin, ExpressionChildrenHavingBase
 
@@ -45,7 +43,7 @@ class ExpressionOutlineBody(ExpressionChildrenHavingBase):
         "body",
     )
 
-    def __init__(self, provider, name, body, source_ref):
+    def __init__(self, provider, name, source_ref, body = None):
         assert name != ""
 
         ExpressionChildrenHavingBase.__init__(
@@ -97,6 +95,9 @@ class ExpressionOutlineBody(ExpressionChildrenHavingBase):
         return self.provider.allocateTempScope(
             name = self.name + '$' + name
         )
+
+    def getContainingClassDictCreation(self):
+        return self.getParentVariableProvider().getContainingClassDictCreation()
 
     def computeExpressionRaw(self, constraint_collection):
         owning_module = self.getParentModule()

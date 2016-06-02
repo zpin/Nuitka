@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -40,6 +40,7 @@ def getModuleWhiteList():
         "syslog", "_datetime", "_elementtree", "_pickle", "_posixsubprocess",
         "_thread", "atexit", "pyexpat", "_imp", "_sha1", "faulthandler",
         "_osx_support", "sysconfig", "copyreg", "ipaddress", "reprlib",
+        "win32event", "win32file",
 
         # Python-Qt4 does these if missing python3 parts:
         "PyQt4.uic.port_v3.string_io", "PyQt4.uic.port_v3.load_plugin",
@@ -49,8 +50,14 @@ def getModuleWhiteList():
         # CPython3 does these:
         "builtins", "UserDict", "os.path", "StringIO",
 
+        # "test_array",
+        "_testcapi",
+
         # test_applesingle.py
         "applesingle",
+
+        # test_buffer.py
+        "_testbuffer",
 
         # test_bsddb.py
         "bsddb.test",
@@ -82,6 +89,9 @@ def getModuleWhiteList():
 
         # test_email_codecs.py
         "email.test",
+
+        # test_enum.py
+        "enum",
 
         # test_file.py
         "_pyio",
@@ -115,7 +125,7 @@ def getModuleWhiteList():
         "importlib.test.__main__", "importlib",
 
         # test_inspect.py
-        "inspect_fodder3",
+        "inspect_fodder3", "test.test_import",
 
         # test_imageop.py
         "imgfile",
@@ -127,7 +137,7 @@ def getModuleWhiteList():
         "lib2to3.tests",
 
         # test_logging.py
-        "win32evtlog", "win32evtlogutil",
+        "win32evtlog", "win32evtlogutil", "pywintypes",
 
         # test_lzma.py
         "lzma",
@@ -141,8 +151,11 @@ def getModuleWhiteList():
 
         # test_new.py
         "Spam",
-        # est_ossaudiodev.py
+        # test_ossaudiodev.py
         "ossaudiodev",
+
+        # test_pathlib.py
+        "pathlib",
 
         # test_platform.py
         "gestalt",
@@ -152,7 +165,8 @@ def getModuleWhiteList():
         "t7", "t7.sub", "t7.sub.subsub", "t8",
 
         # test_pkgutil.py
-        "foo", "zipimport",
+        "foo", "foo.bar", "foo.baz", "zipimport", "pkg", "pkg.subpkg",
+        "pkg.subpkg.c", "pkg.subpkg.d",
 
         # test_urllib.py
         "urllib.parse",
@@ -169,6 +183,15 @@ areallylongpackageandmodulenametotestreprtruncation""",
 
         # test_runpy.py
         "test.script_helper",
+
+        # test_selectors.py
+        "selectors",
+
+        # test_statistics.py
+        "statistics",
+
+        # test_shelve.py
+         "test.test_dbm",
 
         # test_strftime.py
         "java",
@@ -193,6 +216,12 @@ areallylongpackageandmodulenametotestreprtruncation""",
 
         # test_traceback.py
         "test_bug737473",
+
+        # test_tracemalloc
+        "tracemalloc",
+
+        # test_typing.py
+        "mock", "typing.io", "typing.re",
 
         # test_unittest.py
         "unittest.test",

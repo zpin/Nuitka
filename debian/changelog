@@ -1,3 +1,83 @@
+nuitka (0.5.21.3+ds-1) unstable; urgency=medium
+
+  * New upstream hotfix release.
+
+ -- Kay Hayen <kay.hayen@gmail.com>  Thu, 26 May 2016 14:51:39 +0200
+
+nuitka (0.5.21.2+ds-1) unstable; urgency=medium
+
+  * New upstream hotfix release.
+
+ -- Kay Hayen <kay.hayen@gmail.com>  Sat, 14 May 2016 14:43:28 +0200
+
+nuitka (0.5.21.1+ds-1) unstable; urgency=medium
+
+  * New upstream hotfix release.
+
+  * Depends on g++-5 now.
+
+ -- Kay Hayen <kay.hayen@gmail.com>  Sat, 30 Apr 2016 07:59:57 +0200
+
+nuitka (0.5.21+ds-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Kay Hayen <kay.hayen@gmail.com>  Sun, 24 Apr 2016 14:06:29 +0200
+
+nuitka (0.5.20+ds-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Kay Hayen <kay.hayen@gmail.com>  Sun, 20 Mar 2016 08:11:16 +0100
+
+nuitka (0.5.19.1+ds-1) unstable; urgency=medium
+
+  * New upstream hotfix release.
+
+ -- Kay Hayen <kay.hayen@gmail.com>  Tue, 15 Mar 2016 09:11:57 +0100
+
+nuitka (0.5.19+ds-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Kay Hayen <kay.hayen@gmail.com>  Mon, 01 Feb 2016 07:53:08 +0100
+
+nuitka (0.5.18.1+ds-1) unstable; urgency=medium
+
+  * New upstream hotfix release.
+
+ -- Kay Hayen <kay.hayen@gmail.com>  Sun, 24 Jan 2016 07:52:03 +0100
+
+nuitka (0.5.18+ds-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Kay Hayen <kay.hayen@gmail.com>  Fri, 15 Jan 2016 07:48:41 +0100
+
+nuitka (0.5.17.1+ds-1) unstable; urgency=medium
+
+  * New upstream hotfix release.
+
+ -- Kay Hayen <kay.hayen@gmail.com>  Thu, 14 Jan 2016 23:21:51 +0100
+
+nuitka (0.5.17+ds-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Kay Hayen <kay.hayen@gmail.com>  Sun, 27 Dec 2015 15:18:39 +0100
+
+nuitka (0.5.16.1+ds-1) unstable; urgency=medium
+
+  * New upstream hotfix release.
+
+ -- Kay Hayen <kay.hayen@gmail.com>  Thu, 03 Dec 2015 07:04:12 +0100
+
+nuitka (0.5.16+ds-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Kay Hayen <kay.hayen@gmail.com>  Mon, 09 Nov 2015 18:30:07 +0100
+
 nuitka (0.5.15+ds-1) unstable; urgency=medium
 
   * New upstream release.

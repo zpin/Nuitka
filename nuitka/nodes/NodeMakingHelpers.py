@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -254,7 +254,7 @@ def makeStatementOnlyNodesFromExpressions(expressions):
     if not statements:
         return None
     elif len(statements) == 1:
-        return statements[ 0 ]
+        return statements[0]
     else:
         return StatementsSequence(
             statements = statements,
@@ -266,7 +266,9 @@ def makeComparisonNode(left, right, comparator, source_ref):
     from .ComparisonNodes import (
         ExpressionComparison,
         ExpressionComparisonIs,
-        ExpressionComparisonIsNOT
+        ExpressionComparisonIsNOT,
+        ExpressionComparisonIn,
+        ExpressionComparisonNOTIn
     )
 
     if comparator == "Is":
@@ -277,10 +279,22 @@ def makeComparisonNode(left, right, comparator, source_ref):
         )
     elif comparator == "IsNot":
         result = ExpressionComparisonIsNOT(
-                left       = left,
-                right      = right,
-                source_ref = source_ref
-            )
+            left       = left,
+            right      = right,
+            source_ref = source_ref
+        )
+    elif comparator == "In":
+        result = ExpressionComparisonIn(
+            left       = left,
+            right      = right,
+            source_ref = source_ref
+        )
+    elif comparator == "NotIn":
+        result = ExpressionComparisonNOTIn(
+            left       = left,
+            right      = right,
+            source_ref = source_ref
+        )
     else:
         result = ExpressionComparison(
             left       = left,

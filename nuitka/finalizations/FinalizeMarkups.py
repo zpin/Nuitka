@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -35,7 +35,7 @@ from logging import warning
 
 from nuitka import Options, Tracing
 from nuitka.importing import StandardLibrary
-from nuitka.plugins.PluginBase import Plugins
+from nuitka.plugins.Plugins import Plugins
 from nuitka.PythonVersions import python_version
 
 from .FinalizeBase import FinalizationVisitorBase
@@ -68,7 +68,7 @@ class FinalizeMarkups(FinalizationVisitorBase):
 
         # Find nodes with only compile time constant children, these are
         # missing some obvious optimization potentially.
-        if False:
+        if False: # For searching only, pylint: disable=W0125
             if not node.isStatementReturn() and \
                not node.isExpressionYield() and \
                not node.isStatementRaiseException() and \
@@ -94,7 +94,7 @@ class FinalizeMarkups(FinalizationVisitorBase):
         if node.needsLocalsDict():
             provider = node.getParentVariableProvider()
 
-            if provider.isExpressionFunctionBody():
+            if not provider.isCompiledPythonModule():
                 provider.markAsLocalsDict()
 
         if node.isStatementReturn() or node.isStatementGeneratorReturn():
@@ -106,7 +106,8 @@ class FinalizeMarkups(FinalizationVisitorBase):
             # containing the "return" statement.
             search = search.getParentReturnConsumer()
 
-            if search.isExpressionFunctionBody() and search.isGenerator():
+            if search.isExpressionGeneratorObjectBody() or \
+               search.isExpressionCoroutineObjectBody():
                 if in_tried_block:
                     search.markAsNeedsGeneratorReturnHandling(2)
                 else:
@@ -164,7 +165,7 @@ of '--recurse-directory'.""" % (
             if node.isExpressionYield() or node.isExpressionYieldFrom():
                 search = node.getParent()
 
-                while not search.isExpressionFunctionBody():
+                while not search.isExpressionGeneratorObjectBody():
                     last_search = search
                     search = search.getParent()
 

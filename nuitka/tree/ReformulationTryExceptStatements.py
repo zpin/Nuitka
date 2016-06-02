@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -47,14 +47,15 @@ from nuitka.nodes.StatementNodes import (
     StatementsSequence
 )
 from nuitka.nodes.TryNodes import StatementTry
+from nuitka.PythonVersions import python_version
 from nuitka.tree import SyntaxErrors
-from nuitka.utils import Utils
 
 from .Helpers import (
     buildNode,
     buildStatementsNode,
     makeReraiseExceptionStatement,
     makeStatementsSequence,
+    makeStatementsSequenceFromStatement,
     makeStatementsSequenceFromStatements,
     mergeStatements
 )
@@ -73,9 +74,6 @@ def makeTryExceptNoRaise(provider, temp_scope, tried, handling, no_raise,
     # execution, we use an indicator variable instead, which will signal that
     # the tried block executed up to the end. And then we make the else block be
     # a conditional statement checking that.
-
-    if tried is None:
-        return no_raise
 
     tmp_handler_indicator_variable = provider.allocateTempVariable(
         temp_scope = temp_scope,
@@ -159,8 +157,8 @@ def makeTryExceptNoRaise(provider, temp_scope, tried, handling, no_raise,
 
 
 
-def makeTryExceptSingleHandlerNode(provider, tried, exception_name, handler_body,
-                                   source_ref, public_exc = False):
+def _makeTryExceptSingleHandlerNode(provider, public_exc, tried, exception_name,
+                                    handler_body, source_ref):
     # No need to create this in the first place if nothing is tried.
     if tried is None:
         return None
@@ -179,6 +177,16 @@ def makeTryExceptSingleHandlerNode(provider, tried, exception_name, handler_body
         ]
     else:
         handling = []
+
+    if not handler_body.isStatementsSequence():
+        handler_body = makeStatementsSequenceFromStatement(
+            statement = handler_body
+        )
+
+    if not tried.isStatementsSequence():
+        tried = makeStatementsSequenceFromStatement(
+            statement = tried
+        )
 
     handling.append(
         StatementConditional(
@@ -200,7 +208,7 @@ def makeTryExceptSingleHandlerNode(provider, tried, exception_name, handler_body
         )
     )
 
-    if Utils.python_version >= 300 and public_exc:
+    if python_version >= 300 and public_exc:
         handling = (
             makeTryFinallyStatement(
                 provider   = provider,
@@ -224,6 +232,29 @@ def makeTryExceptSingleHandlerNode(provider, tried, exception_name, handler_body
         continue_handler = None,
         return_handler   = None,
         source_ref       = source_ref
+    )
+
+def makeTryExceptSingleHandlerNode(tried, exception_name, handler_body,
+                                   source_ref):
+    return _makeTryExceptSingleHandlerNode(
+        provider       = None,
+        public_exc     = False,
+        tried          = tried,
+        exception_name = exception_name,
+        handler_body   = handler_body,
+        source_ref     = source_ref
+    )
+
+def makeTryExceptSingleHandlerNodeWithPublish(provider, public_exc, tried,
+                                              exception_name, handler_body,
+                                              source_ref):
+    return _makeTryExceptSingleHandlerNode(
+        provider       = provider,
+        public_exc     = public_exc,
+        tried          = tried,
+        exception_name = exception_name,
+        handler_body   = handler_body,
+        source_ref     = source_ref
     )
 
 
@@ -259,7 +290,7 @@ def buildTryExceptionNode(provider, node, source_ref):
                     source_ref = source_ref
                 )
             ]
-        elif Utils.python_version < 300:
+        elif python_version < 300:
             statements = [
                 buildAssignmentStatements(
                     provider   = provider,
@@ -283,8 +314,6 @@ def buildTryExceptionNode(provider, node, source_ref):
                 source_ref = source_ref,
             )
 
-            # We didn't allow None, therefore it cannot be None, and
-            # the unpack is safe: pylint: disable=W0633
             kind, detail = target_info
 
             assert kind == "Name", kind
@@ -379,7 +408,7 @@ def buildTryExceptionNode(provider, node, source_ref):
         # For Python3, we need not publish at all, if all we do is to revert
         # that immediately. For Python2, the publish may release previously
         # published exception, which has side effects potentially.
-        if Utils.python_version < 300:
+        if python_version < 300:
             exception_handling = StatementsSequence(
                 statements = (
                     StatementPreserveFrameException(
@@ -393,7 +422,7 @@ def buildTryExceptionNode(provider, node, source_ref):
                 source_ref = source_ref.atInternal()
             )
     else:
-        if Utils.python_version < 300:
+        if python_version < 300:
             exception_handling.setStatements(
                 (
                     StatementPreserveFrameException(
@@ -446,6 +475,9 @@ def buildTryExceptionNode(provider, node, source_ref):
             source_ref       = source_ref
         )
     else:
+        if tried is None:
+            return no_raise
+
         return makeTryExceptNoRaise(
             provider   = provider,
             temp_scope = provider.allocateTempScope("try_except"),

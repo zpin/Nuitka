@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -23,12 +23,13 @@ should attempt to make run time detections.
 
 """
 
+import os
 import re
 import sys
 
 
 def getSupportedPythonVersions():
-    return ("2.6", "2.7", "3.2", "3.3", "3.4")
+    return ("2.6", "2.7", "3.2", "3.3", "3.4", "3.5")
 
 
 def getSupportedPythonVersionStr():
@@ -101,5 +102,85 @@ def f():
         return e.message.replace("'f'", "'%s'")
 
 
+def getComplexCallSequenceErrorTemplate():
+    if not hasattr(getComplexCallSequenceErrorTemplate, "result"):
+        try:
+            # We are doing this on purpose, to get the exception.
+            # pylint: disable=E1133,E1102
+            f = None
+            f(*None)
+        except TypeError as e:
+            result = e.args[0].replace("NoneType object", "%s").replace("NoneType", "%s")
+            getComplexCallSequenceErrorTemplate.result = result
+        else:
+            sys.exit("Error, cannot detect expected error message.")
+
+    return getComplexCallSequenceErrorTemplate.result
+
+
 def isUninstalledPython():
-    return "Anaconda" in sys.version or "WinPython" in sys.version
+    return "Anaconda" in sys.version or \
+           "WinPython" in sys.version or \
+           (os.name == "nt" and python_version >= 350)
+
+
+def getRunningPythonDLLPath():
+    import ctypes.wintypes
+
+    GetModuleHandle = ctypes.windll.kernel32.GetModuleHandleW  # @UndefinedVariable
+    GetModuleHandle.argtypes = (
+        ctypes.wintypes.LPWSTR,
+    )
+    GetModuleHandle.restype = ctypes.wintypes.DWORD
+
+    big, major = sys.version_info[0:2]
+
+    dll_module_name = "python%d%d" % (big, major)
+    module_handle = GetModuleHandle(dll_module_name)
+
+    if module_handle == 0:
+        dll_module_name += "_d"
+        module_handle = GetModuleHandle(dll_module_name)
+
+    assert module_handle, (sys.executable, dll_module_name, sys.flags.debug)
+
+    MAX_PATH = 4096
+    buf = ctypes.create_unicode_buffer(MAX_PATH)
+
+    GetModuleFileName = ctypes.windll.kernel32.GetModuleFileNameW  # @UndefinedVariable
+    GetModuleFileName.argtypes = (
+        ctypes.wintypes.HANDLE,
+        ctypes.wintypes.LPWSTR,
+        ctypes.wintypes.DWORD
+    )
+    GetModuleFileName.restype = ctypes.wintypes.DWORD
+
+    res = GetModuleFileName(module_handle, buf, MAX_PATH)
+    assert res != 0
+
+    dll_path = os.path.normcase(buf.value)
+    assert os.path.exists(dll_path), dll_path
+
+    return dll_path
+
+
+def getTargetPythonDLLPath():
+    dll_path = getRunningPythonDLLPath()
+
+    from nuitka.Options import isPythonDebug
+
+    if dll_path.endswith("_d.dll"):
+        if not isPythonDebug():
+            dll_path = dll_path[:-5] + ".dll"
+
+        if not os.path.exists(dll_path):
+            sys.exit("Error, cannot switch to non-debug Python, not installed.")
+
+    else:
+        if isPythonDebug():
+            dll_path = dll_path[:-4] + "_d.dll"
+
+        if not os.path.exists(dll_path):
+            sys.exit("Error, cannot switch to debug Python, not installed.")
+
+    return dll_path

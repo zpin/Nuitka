@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Python tests originally created or extracted from other peoples work. The
 #     parts were too small to be protected.
@@ -105,6 +105,13 @@ def simpleFunction4():
         gi.throw(AttributeError)
     except Exception:
         pass
+
+
+def simpleFunction5():
+    def g():
+        yield from (2,3)
+
+    return list( g() )
 
 
 

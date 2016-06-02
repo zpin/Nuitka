@@ -1,8 +1,8 @@
 #!/usr/bin/env python
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Python test originally created or extracted from other peoples work. The
-#     parts from me are licensed as below. It is at least Free Softwar where
+#     parts from me are licensed as below. It is at least Free Software where
 #     it's copied from other people. In these cases, that will normally be
 #     indicated.
 #
@@ -39,7 +39,8 @@ from test_common import (
     compareWithCPython,
     decideFilenameVersionSkip,
     getRuntimeTraceOfLoadedFiles,
-    createSearchMode
+    createSearchMode,
+    reportSkip
 )
 
 python_version = setup(needs_io_encoding = True)
@@ -78,14 +79,11 @@ for filename in sorted(os.listdir('.')):
         # which should be considered irrelevant by now.
         if python_version.startswith("2.6") or \
            python_version.startswith("3.2"):
-            my_print("Skipping", filename, "not relevant.")
+            reportSkip(".", filename, "irrelevant Python version.")
             continue
 
         if not hasModule("PySide.QtCore"):
-            my_print(
-                "Skipping", filename, "PySide not installed for",
-                python_version, "but test needs it."
-            )
+            reportSkip(".", filename, "PySide not installed for this Python version, but test needs it.")
             continue
 
         # For the warnings.
@@ -96,32 +94,35 @@ for filename in sorted(os.listdir('.')):
         # which should be considered irrelevant by now.
         if python_version.startswith("2.6") or \
            python_version.startswith("3.2"):
-            my_print("Skipping", filename, "not relevant.")
+            reportSkip(".", filename, "irrelevant Python version.")
             continue
 
         if not hasModule("PyQt4.QtGui"):
-            my_print(
-                "Skipping", filename, "PyQt4 not installed for",
-                python_version, "but test needs it."
-            )
+            reportSkip(".", filename, "PyQt4 not installed for this Python version, but test needs it.")
             continue
 
         # For the plug-in information.
         extra_flags.append("ignore_infos")
+
+    if "Idna" in filename:
+        if not hasModule("idna.core"):
+            reportSkip(".", filename, "idna not installed for this Python version, but test needs it.")
+            continue
+
+        # For the warnings of Python2.
+        if python_version.startswith("2"):
+            extra_flags.append("ignore_stderr")
 
     if "PyQt5" in filename:
         # Don't test on platforms not supported by current Debian testing, and
         # which should be considered irrelevant by now.
         if python_version.startswith("2.6") or \
            python_version.startswith("3.2"):
-            my_print("Skipping", filename, "not relevant.")
+            reportSkip(".", filename, "irrelevant Python version.")
             continue
 
         if not hasModule("PyQt5.QtGui"):
-            my_print(
-                "Skipping", filename, "PyQt5 not installed for",
-                python_version, "but test needs it."
-            )
+            reportSkip(".", filename, "PyQt5 not installed for this Python version, but test needs it.")
             continue
 
         # For the plug-in information.
@@ -142,14 +143,11 @@ for filename in sorted(os.listdir('.')):
         # which should be considered irrelevant by now.
         if python_version.startswith("2.6") or \
            python_version.startswith("3.2"):
-            my_print("Skipping", filename, "not relevant.")
+            reportSkip(".", filename, "irrelevant Python version.")
             continue
 
         if not hasModule("pygtk"):
-            my_print(
-                "Skipping", filename, "pygtk not installed for",
-                python_version, "but test needs it."
-            )
+            reportSkip(".", filename, "pygtk not installed for this Python version, but test needs it.")
             continue
 
         # For the warnings.
@@ -157,36 +155,63 @@ for filename in sorted(os.listdir('.')):
 
     if filename.startswith("Win"):
         if os.name != "nt":
-            my_print("Skipping", filename, "windows only.")
+            reportSkip(".", filename, "Windows only test.")
             continue
 
     if filename == "Win32ComUsing.py":
         if not hasModule("win32com"):
-            my_print(
-                "Skipping", filename, "win32com not installed for",
-                python_version, "but test needs it."
-            )
+            reportSkip(".", filename, "win32com not installed for this Python version, but test needs it.")
             continue
 
     if filename == "LxmlUsing.py":
         if not hasModule("lxml.etree"):
-            my_print(
-                "Skipping", filename, "lxml.etree not installed for",
-                python_version, "but test needs it."
-            )
+            reportSkip(".", filename, "lxml.etree not installed for this Python version, but test needs it.")
             continue
 
     if filename == "TkInterUsing.py":
-        if not hasModule("tkinter"):
-            my_print(
-                "Skipping", filename, "tkinter not installed for",
-                python_version, "but test needs it."
-            )
+        if python_version.startswith("2"):
+            if not hasModule("Tkinter"):
+                reportSkip(".", filename, "Tkinter not installed for this Python version, but test needs it.")
+                continue
+        else:
+            if not hasModule("tkinter"):
+                reportSkip(".", filename, "tkinter not installed for this Python version, but test needs it.")
+                continue
+
+            # For the warnings.
+            extra_flags.append("ignore_stderr")
+
+
+    if filename == "FlaskUsing.py":
+        if not hasModule("flask"):
+            reportSkip(".", filename, "flask not installed for this Python version, but test needs it.")
             continue
+
+        # For the warnings.
+        extra_flags.append("ignore_stderr")
+
+    if filename == "NumpyUsing.py":
+        # TODO: Disabled for now.
+        reportSkip(".", filename, "numpy.test not fully working yet.")
+        continue
+
+        if not hasModule("numpy"):
+            reportSkip(".", filename, "numpy not installed for this Python version, but test needs it.")
+            continue
+
+        extra_flags.append("plugin_enable:data-files")
+
+    if filename == "PmwUsing.py":
+        if not hasModule("Pwm"):
+            reportSkip(".", filename, "Pwm not installed for this Python version, but test needs it.")
+            continue
+
+        extra_flags.append("plugin_enable:pmw-freeze")
 
     if filename not in ("PySideUsing.py", "PyQt4Using.py", "PyQt5Using.py",
                         "PyQt4Plugins.py", "PyQt5Plugins.py", "GtkUsing.py",
-                        "LxmlUsing.py", "Win32ComUsing.py"):
+                        "LxmlUsing.py", "Win32ComUsing.py", "IdnaUsing.py",
+                        "NumpyUsing.py", "FlaskUsing.py"):
         extra_flags += [
             "no_site"
         ]
@@ -246,18 +271,6 @@ for filename in sorted(os.listdir('.')):
         if loaded_filename.startswith("/usr/share/X11/locale/"):
             continue
 
-        if loaded_filename.startswith("/lib/libc.") or \
-           loaded_filename.startswith("/lib64/libc."):
-            continue
-
-        if loaded_filename.startswith("/lib/libdl.") or \
-           loaded_filename.startswith("/lib64/libdl."):
-            continue
-
-        if loaded_filename.startswith("/lib/libm.") or \
-           loaded_filename.startswith("/lib64/libm."):
-            continue
-
         if loaded_filename.startswith("/lib/libz.") or \
            loaded_filename.startswith("/lib64/libz."):
             continue
@@ -266,12 +279,15 @@ for filename in sorted(os.listdir('.')):
            loaded_filename.startswith("/lib64/libutil."):
             continue
 
-        if loaded_filename.startswith("/lib/libpthread.") or \
-           loaded_filename.startswith("/lib64/libpthread."):
-            continue
-
         if loaded_filename.startswith("/lib/libgcc_s.") or \
            loaded_filename.startswith("/lib64/libgcc_s."):
+            continue
+
+        # System C libraries are to be expected.
+        if os.path.basename(loaded_filename).startswith("libc.so.") or \
+           os.path.basename(loaded_filename).startswith("libpthread.so.") or \
+           os.path.basename(loaded_filename).startswith("libdl.so.") or \
+           os.path.basename(loaded_filename).startswith("libm.so."):
             continue
 
         # Loaded by C library potentially for DNS lookups.
@@ -341,6 +357,18 @@ for filename in sorted(os.listdir('.')):
 
         # Accessing SE-Linux is OK.
         if loaded_filename in ("/sys/fs/selinux", "/selinux"):
+            continue
+
+        # Allow reading time zone info of local system.
+        if loaded_filename.startswith("/usr/share/zoneinfo/"):
+            continue
+
+        # The access to .pth files has no effect.
+        if loaded_filename.endswith(".pth"):
+            continue
+
+        # Looking at site-package dir alone is alone.
+        if loaded_filename.endswith("site-packages"):
             continue
 
         loaded_basename = os.path.basename(loaded_filename).upper()

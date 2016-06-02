@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -306,3 +306,6 @@ Iteration over constant %s changed to tuple.""" % type(self.constant).__name__
             constraint_collection.onExceptionRaiseExit(TypeError)
 
         return iter_node, None, None
+
+    def hasShapeDictionaryExact(self):
+        return type(self.constant) is dict

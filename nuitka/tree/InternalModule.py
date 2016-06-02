@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -24,9 +24,12 @@ own these functions to a random module.
 
 
 from nuitka.nodes.ModuleNodes import PythonInternalModule
+from nuitka.SourceCodeReferences import fromFilename
 from nuitka.VariableRegistry import addVariableUsage
 
 internal_module = None
+
+internal_source_ref = fromFilename("internal").atInternal()
 
 # Cache result.
 def once_decorator(func):

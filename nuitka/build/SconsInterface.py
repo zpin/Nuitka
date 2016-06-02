@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -15,8 +15,7 @@
 #     See the License for the specific language governing permissions and
 #     limitations under the License.
 #
-"""
-Scons interface.
+""" Scons interface.
 
 Interaction with scons. Find the binary, and run it with a set of given
 options.
@@ -30,6 +29,7 @@ import subprocess
 import sys
 
 from nuitka import Options, Tracing
+from nuitka.PythonVersions import getTargetPythonDLLPath, python_version
 from nuitka.utils import Utils
 
 
@@ -93,7 +93,7 @@ def _getPython2ExePathWindows():
 
 def getPython2ExePath():
     """ Find a way to call Python2. Scons needs it."""
-    if Utils.python_version < 300:
+    if python_version < 300:
         return sys.executable
     elif Utils.getOS() == "Windows":
         python_exe = _getPython2ExePathWindows()
@@ -127,10 +127,15 @@ def setupSconsEnvironment():
             "scons-2.3.2"
         )
 
+        # On Windows, we use the Python.DLL path for some things. We pass it
+        # via environment variable
+        os.environ["NUITKA_PYTHON_DLL_PATH"] = getTargetPythonDLLPath()
+
+        os.environ["NUITKA_PYTHON_EXE_PATH"] = sys.executable
     # Remove environment variables that can only harm if we have to switch
     # major Python versions, these cannot help Python2 to execute scons, this
     # is a bit of noise, but helpful.
-    if Utils.python_version >= 300:
+    if python_version >= 300:
         if "PYTHONPATH" in os.environ:
             old_pythonpath = os.environ["PYTHONPATH"]
             del os.environ["PYTHONPATH"]
@@ -145,12 +150,16 @@ def setupSconsEnvironment():
 
     yield
 
-    if Utils.python_version >= 300:
+    if python_version >= 300:
         if old_pythonpath is not None:
             os.environ["PYTHONPATH"] = old_pythonpath
 
         if old_pythonhome is not None:
             os.environ["PYTHONHOME"] = old_pythonhome
+
+    if Utils.getOS() == "Windows":
+        del os.environ["NUITKA_PYTHON_DLL_PATH"]
+        del os.environ["NUITKA_PYTHON_EXE_PATH"]
 
 
 def buildSconsCommand(quiet, options):

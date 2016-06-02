@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -15,10 +15,10 @@
 #     See the License for the specific language governing permissions and
 #     limitations under the License.
 #
-""" Inlining of functions.
+""" In-lining of functions.
 
 Done by assigning the argument values to variables, and producing an outline
-from the inlined function.
+from the in-lined function.
 """
 
 from nuitka.nodes.AssignNodes import StatementAssignmentVariable
@@ -39,7 +39,6 @@ def convertFunctionCallToOutline(provider, function_ref, values):
     outline_body = ExpressionOutlineBody(
         provider   = provider,
         name       = "inline",
-        body       = None,
         source_ref = source_ref
 
     )
@@ -70,7 +69,7 @@ def convertFunctionCallToOutline(provider, function_ref, values):
 
     statements = []
 
-    argument_names = function_body.getParameters().getAllNames()
+    argument_names = function_body.getParameters().getParameterNames()
 
     assert len(argument_names) == len(values), (argument_names, values)
 

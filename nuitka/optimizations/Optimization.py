@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -23,14 +23,17 @@ make others possible.
 """
 
 
-from logging import debug, warning
+import inspect
+from logging import debug, info
 
 from nuitka import ModuleRegistry, Options, VariableRegistry
-from nuitka.optimizations import TraceCollections
-from nuitka.plugins.PluginBase import Plugins
+from nuitka.importing import ImportCache
+from nuitka.optimizations import Graphs, TraceCollections
+from nuitka.plugins.Plugins import Plugins
 from nuitka.Tracing import printLine
-from nuitka.utils import Utils
+from nuitka.utils import MemoryUsage
 
+from .BytecodeDemotion import demoteCompiledModuleToBytecode
 from .Tags import TagSet
 
 _progress = Options.isShowProgress()
@@ -59,7 +62,7 @@ def signalChange(tags, source_ref, message):
             "{source_ref} : {tags} : {message}".format(
                 source_ref = source_ref.getAsString(),
                 tags       = tags,
-                message    = message
+                message    = message() if inspect.isfunction(message) else message
             )
         )
 
@@ -68,10 +71,8 @@ def signalChange(tags, source_ref, message):
 # Use this globally from there, without cyclic dependency.
 TraceCollections.signalChange = signalChange
 
-graph = None
-computation_counters = {}
 
-def optimizePythonModule(module):
+def optimizeCompiledPythonModule(module):
     if _progress:
         printLine(
             "Doing module local optimizations for '{module_name}'.".format(
@@ -79,33 +80,35 @@ def optimizePythonModule(module):
             )
         )
 
-    # The tag set is global, so it can react to changes without context.
-    # pylint: disable=W0603
-    global tag_set
-    tag_set = TagSet()
-
     touched = False
 
-    if _progress:
-        memory_watch = Utils.MemoryWatch()
+    if _progress and Options.isShowMemory():
+        memory_watch = MemoryUsage.MemoryWatch()
 
     while True:
         tag_set.clear()
 
-        module.computeModule()
+        try:
+            module.computeModule()
+        except BaseException:
+            info("Interrupted while working on '%s'." % module)
+            raise
 
-        if not tag_set:
+        Graphs.onModuleOptimizationStep(module)
+
+        # Search for local change tags.
+        for tag in tag_set:
+            if tag == "new_code":
+                continue
+
+            break
+        else:
             break
 
-        if graph is not None:
-            computation_counters[module] = computation_counters.get(module, 0) + 1
-            module_graph = module.asGraph(computation_counters[module])
-
-            graph.subgraph(module_graph)
-
+        # Otherwise we did stuff, so note that for return value.
         touched = True
 
-    if _progress:
+    if _progress and Options.isShowMemory():
         memory_watch.finish()
 
         printLine(
@@ -117,19 +120,45 @@ def optimizePythonModule(module):
 
     Plugins.considerImplicitImports(module, signal_change = signalChange)
 
-    return touched or module.hasUnclearLocals()
+    return touched
+
+def optimizeUncompiledPythonModule(module):
+    if _progress:
+        printLine(
+            "Doing module dependency considerations for '{module_name}':".format(
+                module_name = module.getFullName()
+            )
+        )
+
+    for used_module_name in module.getUsedModules():
+        used_module = ImportCache.getImportedModuleByName(used_module_name)
+        ModuleRegistry.addUsedModule(used_module)
+
+    package_name = module.getPackage()
+
+    if package_name is not None:
+        used_module = ImportCache.getImportedModuleByName(package_name)
+        ModuleRegistry.addUsedModule(used_module)
 
 
 def optimizeShlibModule(module):
     # Pick up parent package if any.
     _attemptRecursion(module)
 
-    # The tag set is global, so it can react to changes without context.
-    # pylint: disable=W0603
-    global tag_set
-    tag_set = TagSet()
-
     Plugins.considerImplicitImports(module, signal_change = signalChange)
+
+
+def optimizeModule(module):
+    if module.isPythonShlibModule():
+        optimizeShlibModule(module)
+        changed = False
+    elif module.isCompiledPythonModule():
+        changed = optimizeCompiledPythonModule(module)
+    else:
+        optimizeUncompiledPythonModule(module)
+        changed = False
+
+    return changed
 
 
 def areEmptyTraces(variable_traces):
@@ -194,11 +223,17 @@ def areReadOnlyTraces(variable_traces):
     return read_only
 
 
-
-
 def optimizeUnusedClosureVariables(function_body):
     for closure_variable in function_body.getClosureVariables():
         # print "VAR", closure_variable
+
+        # Need to take closure of
+        if closure_variable.isParameterVariable() and \
+           function_body.isExpressionGeneratorObjectBody():
+            continue
+
+        if function_body.hasFlag("has_super") and closure_variable.getName() in ("__class__", "self"):
+            continue
 
         variable_traces = function_body.constraint_collection.getVariableTraces(
             variable = closure_variable
@@ -217,7 +252,7 @@ def optimizeUnusedClosureVariables(function_body):
             read_only = areReadOnlyTraces(variable_traces)
 
             if read_only:
-                global_trace = VariableRegistry.getGlobalVariableTrace(closure_variable)
+                global_trace = closure_variable.getGlobalVariableTrace()
 
                 if global_trace is not None:
                     if not global_trace.hasWritesOutsideOf(function_body):
@@ -254,91 +289,111 @@ def optimizeUnusedTempVariables(provider):
 
 
 def optimizeVariables(module):
-    for function_body in module.getUsedFunctions():
-        constraint_collection = function_body.constraint_collection
-        if constraint_collection.unclear_locals:
-            continue
+    if module.isCompiledPythonModule():
+        for function_body in module.getUsedFunctions():
+            if not VariableRegistry.complete:
+                continue
 
-        optimizeUnusedUserVariables(function_body)
+            optimizeUnusedUserVariables(function_body)
 
-        optimizeUnusedClosureVariables(function_body)
+            optimizeUnusedClosureVariables(function_body)
 
-        optimizeUnusedTempVariables(function_body)
+            optimizeUnusedTempVariables(function_body)
 
-    optimizeUnusedTempVariables(module)
+        optimizeUnusedTempVariables(module)
+
+
+def _traceProgress(current_module):
+    output = """\
+Optimizing module '{module_name}', {remaining:d} more modules to go \
+after that.""".format(
+            module_name = current_module.getFullName(),
+            remaining   = ModuleRegistry.remainingCount(),
+    )
+
+    if Options.isShowMemory():
+        output += "Memory usage {memory}:".format(
+            memory = MemoryUsage.getHumanReadableProcessMemoryUsage()
+        )
+
+    printLine(output)
+
+
+def makeOptimizationPass(initial_pass):
+    """ Make a single pass for optimization, indication potential completion.
+
+    """
+    finished = True
+
+    ModuleRegistry.startTraversal()
+
+    if _progress:
+        if initial_pass:
+            printLine("Initial optimization pass.")
+        else:
+            printLine("Next global optimization pass.")
+
+    while True:
+        current_module = ModuleRegistry.nextModule()
+
+        if current_module is None:
+            break
+
+        if _progress:
+            _traceProgress(current_module)
+
+        # The tag set is global, so it can react to changes without context.
+        # pylint: disable=W0603
+        global tag_set
+        tag_set = TagSet()
+
+        changed = optimizeModule(current_module)
+
+        if changed:
+            finished = False
+
+    # Unregister collection traces from now unused code, dropping the trace
+    # collections of functions no longer used.
+    for current_module in ModuleRegistry.getDoneModules():
+        if current_module.isCompiledPythonModule():
+            for function in current_module.getUnusedFunctions():
+                VariableRegistry.updateFromCollection(
+                    old_collection = function.constraint_collection,
+                    new_collection = None
+                )
+
+                function.constraint_collection = None
+
+    for current_module in ModuleRegistry.getDoneModules():
+        optimizeVariables(current_module)
+
+    return finished
 
 
 def optimize():
-    # This is somewhat complex with many cases, pylint: disable=R0912
+    Graphs.startGraph()
 
-    # We maintain this globally to make it accessible, pylint: disable=W0603
-    global graph
+    # First pass.
+    if _progress:
+        info("PASS 1:")
 
-    if Options.shouldCreateGraph():
+    makeOptimizationPass(False)
+    VariableRegistry.considerCompletion()
+    finished = makeOptimizationPass(False)
 
-        try:
-            from graphviz import Digraph # pylint: disable=F0401,I0021
-            graph = Digraph('G')
-        except ImportError:
-            warning("Cannot import graphviz module, no graphing capability.")
+    # Demote to bytecode if now.
+    for module in ModuleRegistry.getDoneUserModules():
+        if module.isPythonShlibModule():
+            continue
 
-    while True:
-        finished = True
+        if module.mode == "bytecode":
+            demoteCompiledModuleToBytecode(module)
 
-        ModuleRegistry.startTraversal()
+    # Second, endless pass.
+    if _progress:
+        info("PASS 2..:")
 
-        while True:
-            current_module = ModuleRegistry.nextModule()
+    while not finished:
+        finished = makeOptimizationPass(True)
 
-            if current_module is None:
-                break
-
-            if _progress:
-                printLine(
-                    """\
-Optimizing module '{module_name}', {remaining:d} more modules to go \
-after that. Memory usage {memory}:""".format(
-                        module_name = current_module.getFullName(),
-                        remaining   = ModuleRegistry.remainingCount(),
-                        memory      = Utils.getHumanReadableProcessMemoryUsage()
-                    )
-                )
-
-            if current_module.isPythonShlibModule():
-                optimizeShlibModule(current_module)
-            else:
-                changed = optimizePythonModule(current_module)
-
-                if changed:
-                    finished = False
-
-        # Unregister collection traces from now unused code.
-        for current_module in ModuleRegistry.getDoneModules():
-            if not current_module.isPythonShlibModule():
-                for function in current_module.getUnusedFunctions():
-                    VariableRegistry.updateFromCollection(
-                        old_collection = function.constraint_collection,
-                        new_collection = None
-                    )
-
-                    function.constraint_collection = None
-
-        if not VariableRegistry.complete:
-            VariableRegistry.complete = True
-
-            finished = False
-
-        for current_module in ModuleRegistry.getDoneModules():
-            if not current_module.isPythonShlibModule():
-                optimizeVariables(current_module)
-
-        if finished:
-            break
-
-
-    if graph is not None:
-        graph.engine = "dot"
-        graph.graph_attr["rankdir"] = "TB"
-        graph.render("something.dot")
-
-        printLine(graph.source)
+    Graphs.endGraph()

@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Python tests originally created or extracted from other peoples work. The
 #     parts were too small to be protected.
@@ -91,6 +91,15 @@ def f():
     print("Func flags", sys._getframe().f_code.co_flags)
 
 f()
+
+def g():
+    yield("Generator object locals", sys._getframe().f_locals)
+    yield("Generator object flags", sys._getframe().f_code.co_flags)
+
+for line in g():
+    print(*line)
+
+print("Generator function flags", g.__code__.co_flags)
 
 def displayDict(d):
     if "__loader__" in d:

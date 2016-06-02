@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -26,7 +26,7 @@ result of it can be predicted still, and these are interesting for warnings.
 import math
 
 from nuitka.optimizations import BuiltinOptimization
-from nuitka.utils.Utils import python_version
+from nuitka.PythonVersions import python_version
 
 from .NodeBases import ExpressionBuiltinNoArgBase, ExpressionChildrenHavingBase
 from .NodeMakingHelpers import makeConstantReplacementNode
@@ -84,11 +84,35 @@ class ExpressionBuiltinRangeBase(ExpressionChildrenHavingBase):
 
         return False
 
+    def mayRaiseException(self, exception_type):
+        for child in self.getVisitableNodes():
+            if child.mayRaiseException(exception_type):
+                return True
+
+            # TODO: Should take exception_type value into account here.
+            if child.getIntegerValue() is None:
+                return True
+
+            if python_version >= 270 and \
+               child.isExpressionConstantRef() and \
+               type(child.getConstant()) is float:
+                return True
+
+        step = self.getStep() # false alarm, pylint: disable=E1128
+
+        # A step of 0 will raise.
+        if step is not None and step.getIntegerValue() == 0:
+            return True
+
+        return False
+
     def computeBuiltinSpec(self, constraint_collection, given_values):
         assert self.builtin_spec is not None, self
 
         if not self.builtin_spec.isCompileTimeComputable(given_values):
             constraint_collection.onExceptionRaiseExit(BaseException)
+
+            # TODO: Raise exception known step 0.
 
             return self, None, None
 
@@ -372,7 +396,7 @@ class ExpressionBuiltinRange3(ExpressionBuiltinRangeBase):
 
         estimate = round(estimate)
 
-        assert not estimate < 0
+        assert estimate >= 0
 
         return int(estimate)
 

@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -39,11 +39,12 @@ from nuitka.nodes.ImportNodes import (
     ExpressionImportName
 )
 from nuitka.nodes.ModuleNodes import (
-    ExpressionModuleFileAttributeRef,
-    PythonPackage
+    CompiledPythonPackage,
+    ExpressionModuleFileAttributeRef
 )
+from nuitka.PythonVersions import python_version
 from nuitka.SourceCodeReferences import SourceCodeReference
-from nuitka.utils import Utils
+from nuitka.utils.Utils import dirname
 
 from .Helpers import makeStatementsSequenceFromStatement
 from .VariableClosure import completeVariableClosures
@@ -53,7 +54,7 @@ def createPathAssignment(source_ref):
     if Options.getFileReferenceMode() == "original":
         path_value = ExpressionConstantRef(
             constant      = [
-                Utils.dirname(source_ref.getFilename())
+                dirname(source_ref.getFilename())
             ],
             source_ref    = source_ref,
             user_provided = True
@@ -94,6 +95,7 @@ def createPathAssignment(source_ref):
         source_ref   = source_ref
     )
 
+
 def createPython3NamespacePath(package_name, module_relpath, source_ref):
     return StatementAssignmentVariable(
         variable_ref = ExpressionTargetVariableRef(
@@ -103,7 +105,9 @@ def createPython3NamespacePath(package_name, module_relpath, source_ref):
         source       = ExpressionCallNoKeywords(
             called     = ExpressionImportName(
                 module      = ExpressionImportModule(
-                    module_name = "_frozen_importlib",
+                    module_name = "_frozen_importlib"
+                                    if python_version < 350 else
+                                  "_frozen_importlib_external",
                     import_list = (),
                     level       = 0,
                     source_ref  = source_ref
@@ -136,13 +140,14 @@ def createNamespacePackage(package_name, module_relpath):
     source_ref = source_ref.atInternal()
 
     package_package_name = '.'.join(parts[:-1]) or None
-    package = PythonPackage(
+    package = CompiledPythonPackage(
         name         = parts[-1],
+        mode         = "compiled",
         package_name = package_package_name,
         source_ref   = source_ref,
     )
 
-    if Utils.python_version >= 300:
+    if python_version >= 300:
         statement = createPython3NamespacePath(
             package_name   = package_name,
             module_relpath = module_relpath,

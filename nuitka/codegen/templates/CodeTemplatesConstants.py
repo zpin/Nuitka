@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -60,6 +60,14 @@ static void _createGlobalConstants( void )
 #endif
 
 %(constant_inits)s
+
+#if _NUITKA_EXE
+    /* Set the "sys.executable" path to the original CPython executable. */
+    PySys_SetObject(
+        (char *)"executable",
+        %(sys_executable)s
+    );
+#endif
 }
 
 // In debug mode we can check that the constants were not tampered with in any

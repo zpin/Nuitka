@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -15,7 +15,16 @@
 #     See the License for the specific language governing permissions and
 #     limitations under the License.
 #
-import shutil, sys, os, subprocess
+""" Release: Create and upload Windows MSI files for Nuitka
+
+"""
+
+from __future__ import print_function
+
+import os
+import shutil
+import subprocess
+import sys
 
 if os.path.isdir("dist"):
     shutil.rmtree("dist")
@@ -56,6 +65,7 @@ parts = [
         replace("-py3.2","").\
         replace("-py3.3","").\
         replace("-py3.4","").\
+        replace("-py3.5","").\
         replace("Nuitka32","Nuitka").\
         replace("Nuitka64","Nuitka"),
     "py" + sys.version[:3].replace('.',""),

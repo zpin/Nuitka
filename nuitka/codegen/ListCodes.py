@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -26,18 +26,19 @@ from .ErrorCodes import (
     getReleaseCode,
     getReleaseCodes
 )
-from .Helpers import generateChildExpressionsCode
+from .Helpers import generateChildExpressionsCode, generateExpressionCode
+from .PythonAPICodes import generateCAPIObjectCode
 
 
-def generateListCreationCode(to_name, elements, emit, context):
+def generateListCreationCode(to_name, expression, emit, context):
+    elements = expression.getElements()
+
     emit(
         "%s = PyList_New( %d );" % (
             to_name,
             len(elements)
         )
     )
-
-    from .CodeGeneration import generateExpressionCode
 
     context.addCleanupTempName(to_name)
 
@@ -64,16 +65,29 @@ def generateListCreationCode(to_name, elements, emit, context):
             )
         )
 
-def generateListOperationAppendCode(to_name, expression, emit, context):
-    res_name = context.getIntResName()
 
-    list_arg_name, value_arg_name = generateChildExpressionsCode(
-        expression = expression,
+def generateListOperationAppendCode(statement, emit, context):
+    list_arg_name = context.allocateTempName("append_list")
+    generateExpressionCode(
+        to_name    = list_arg_name,
+        expression = statement.getList(),
         emit       = emit,
         context    = context
     )
 
+    value_arg_name = context.allocateTempName("append_value")
+    generateExpressionCode(
+        to_name    = value_arg_name,
+        expression = statement.getValue(),
+        emit       = emit,
+        context    = context
+    )
 
+    context.setCurrentSourceCodeReference(statement.getSourceReference())
+
+    res_name = context.getIntResName()
+
+    emit("assert( PyList_Check( %s ) );" % list_arg_name)
     emit(
         "%s = PyList_Append( %s, %s );" % (
             res_name,
@@ -94,13 +108,36 @@ def generateListOperationAppendCode(to_name, expression, emit, context):
         context   = context
     )
 
-    # Only assign if necessary.
-    if context.isUsed(to_name):
-        emit(
-            "%s = Py_None;" % to_name
+
+def generateListOperationExtendCode(to_name, expression, emit, context):
+    list_arg_name, value_arg_name = generateChildExpressionsCode(
+        expression = expression,
+        emit       = emit,
+        context    = context
+    )
+
+    emit("assert( PyList_Check( %s ) );" % list_arg_name)
+    emit(
+        "%s = _PyList_Extend( (PyListObject *)%s, %s );" % (
+            to_name,
+            list_arg_name,
+            value_arg_name
         )
-    else:
-        context.forgetTempName(to_name)
+    )
+
+    getReleaseCodes(
+        release_names = (list_arg_name, value_arg_name),
+        emit          = emit,
+        context       = context
+    )
+
+    getErrorExitCode(
+        check_name = to_name,
+        emit       = emit,
+        context    = context
+    )
+
+    context.addCleanupTempName(to_name)
 
 
 def generateListOperationPopCode(to_name, expression, emit, context):
@@ -110,8 +147,8 @@ def generateListOperationPopCode(to_name, expression, emit, context):
         context    = context
     )
 
-
     # TODO: Have a dedicated helper instead, this could be more efficient.
+    emit("assert( PyList_Check( %s ) );" % list_arg_name)
     emit(
         '%s = PyObject_CallMethod(  %s, (char *)"pop", NULL );' % (
             to_name,
@@ -132,3 +169,17 @@ def generateListOperationPopCode(to_name, expression, emit, context):
     )
 
     context.addCleanupTempName(to_name)
+
+
+def generateBuiltinListCode(to_name, expression, emit, context):
+    generateCAPIObjectCode(
+        to_name    = to_name,
+        capi       = "PySequence_List",
+        arg_desc   = (
+            ("list_arg", expression.getValue()),
+        ),
+        may_raise  = expression.mayRaiseException(BaseException),
+        source_ref = expression.getCompatibleSourceReference(),
+        emit       = emit,
+        context    = context
+    )

@@ -1,4 +1,4 @@
-//     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+//     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 //
 //     Part of "Nuitka", an optimizing Python compiler that is compatible and
 //     integrates with CPython, but also works on its own.
@@ -22,6 +22,6 @@ extern PyObject *IMPORT_MODULE( PyObject *module_name, PyObject *globals, PyObje
 
 extern bool IMPORT_MODULE_STAR( PyObject *target, bool is_module, PyObject *module );
 
-extern PyObject *IMPORT_COMPILED_MODULE( PyObject *module_name, char const *name );
+extern PyObject *IMPORT_EMBEDDED_MODULE( PyObject *module_name, char const *name );
 
 #endif

@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -22,7 +22,8 @@
 import ast
 from logging import warning
 
-from nuitka import Constants, Tracing
+from nuitka import Constants, Options, Tracing
+from nuitka.nodes.CodeObjectSpecs import CodeObjectSpec
 from nuitka.nodes.ConditionalNodes import StatementConditional
 from nuitka.nodes.ConstantRefNodes import ExpressionConstantRef
 from nuitka.nodes.ContainerMakingNodes import (
@@ -43,6 +44,7 @@ from nuitka.nodes.StatementNodes import (
     StatementGeneratorEntry,
     StatementsSequence
 )
+from nuitka.PythonVersions import doShowUnknownEncodingName, python_version
 
 
 def dump(node):
@@ -59,6 +61,181 @@ def extractDocFromBody(node):
         return node.body[1:], node.body[0].value.s
     else:
         return node.body, None
+
+
+def _makeSyntaxErrorCompatible(e):
+    # Encoding problems for Python happen here, for Python3, this was
+    # already done when we read the source code.
+    if Options.isFullCompat() and \
+       (e.args[0].startswith("unknown encoding:") or \
+        e.args[0].startswith("encoding problem:")):
+        if doShowUnknownEncodingName():
+            complaint = e.args[0].split(':',2)[1]
+        else:
+            complaint = " with BOM"
+
+        e.args = (
+            "encoding problem:%s" % complaint,
+            (e.args[1][0], 1, None, None)
+        )
+
+        if hasattr(e, "msg"):
+            e.msg = e.args[0]
+
+
+def parseSourceCodeToAst(source_code, filename, line_offset):
+    # Workaround: ast.parse cannot cope with some situations where a file is not
+    # terminated by a new line.
+    if not source_code.endswith('\n'):
+        source_code = source_code + '\n'
+
+    try:
+        body = ast.parse(source_code, filename)
+    except SyntaxError as e:
+        _makeSyntaxErrorCompatible(e)
+
+        raise e
+
+    assert getKind(body) == "Module"
+
+    if line_offset > 0:
+        ast.increment_lineno(body, line_offset)
+
+    return body
+
+
+def detectFunctionBodyKind(nodes):
+    # This is a complex mess, following the scope means a lot of checks need
+    # to be done. pylint: disable=R0912,R0915
+
+    indications = set()
+    written_variables = set()
+    non_local_declarations = set()
+    global_declarations = set()
+    flags = set()
+
+    # print "Enter"
+
+    def _check(node):
+
+        # print "consider", node.__class__
+
+        node_class = node.__class__
+
+        if node_class is ast.Yield:
+            indications.add("Generator")
+        elif python_version >= 330 and node_class is ast.YieldFrom:  # @UndefinedVariable
+            indications.add("Generator")
+        elif python_version >= 350 and node_class in (ast.Await, ast.AsyncWith):  # @UndefinedVariable
+            indications.add("Coroutine")
+
+        # Detect assignments to variables, for functions we need to know that
+        # to properly resolve closure.
+        if node_class is ast.Assign:
+            for target in node.targets:
+                if type(target) is str:
+                    written_variables.add(target)
+                elif target.__class__ is ast.Name:
+                    written_variables.add(target.id)
+
+        # Detect global and nonlocal declarations ahead of time.
+        if python_version >= 300 and node_class is ast.Nonlocal:  # @UndefinedVariable
+            non_local_declarations.update(set(node.names))
+        elif node_class is ast.Global:
+            global_declarations.update(set(node.names))
+
+        # Recurse to children, but do not cross scope boundary doing so.
+        if node_class is ast.ClassDef:
+            for name, field in ast.iter_fields(node):
+                if name in ("name", "body"):
+                    pass
+                elif name in ("bases", "decorator_list", "keywords"):
+                    for child in field:
+                        _check(child)
+                elif name == "starargs":
+                    if field is not None:
+                        _check(field)
+                elif name == "kwargs":
+                    if field is not None:
+                        _check(field)
+                else:
+                    assert False, (name, field, ast.dump(node))
+        elif node_class in (ast.FunctionDef, ast.Lambda) or \
+             (python_version >= 350 and node_class is ast.AsyncFunctionDef):  # @UndefinedVariable
+            for name, field in ast.iter_fields(node):
+                if name in ("name", "body"):
+                    pass
+                elif name in ("bases", "decorator_list"):
+                    for child in field:
+                        _check(child)
+                elif name == "args":
+                    for child in field.defaults:
+                        _check(child)
+
+                    if python_version >= 300:
+                        for child in node.args.kw_defaults:
+                            if child is not None:
+                                _check(child)
+
+                        for child in node.args.args:
+                            if child.annotation is not None:
+                                _check(child.annotation)
+
+                elif name == "returns":
+                    if field is not None:
+                        _check(field)
+                else:
+                    assert False, (name, field, ast.dump(node))
+        elif node_class is ast.GeneratorExp:
+            for name, field in ast.iter_fields(node):
+                if name in ("name", "body", "comparators", "elt"):
+                    pass
+                elif name == "generators":
+                    _check(field[0].iter)
+                else:
+                    assert False, (name, field, ast.dump(node))
+        elif node_class is ast.ListComp and python_version >= 300:
+            for name, field in ast.iter_fields(node):
+                if name in ("name", "body", "comparators", "elt"):
+                    pass
+                elif name == "generators":
+                    _check(field[0].iter)
+                else:
+                    assert False, (name, field, ast.dump(node))
+        elif python_version >= 270 and node_class is ast.SetComp:
+            for name, field in ast.iter_fields(node):
+                if name in ("name", "body", "comparators", "elt"):
+                    pass
+                elif name == "generators":
+                    _check(field[0].iter)
+                else:
+                    assert False, (name, field, ast.dump(node))
+        elif python_version >= 270 and node_class is ast.DictComp:
+            for name, field in ast.iter_fields(node):
+                if name in ("name", "body", "comparators", "key", "value"):
+                    pass
+                elif name == "generators":
+                    _check(field[0].iter)
+                else:
+                    assert False, (name, field, ast.dump(node))
+        elif node_class is ast.Name:
+            if python_version >= 300 and node.id == "super":
+                flags.add("has_super")
+        else:
+            for child in ast.iter_child_nodes(node):
+                _check(child)
+
+    for node in nodes:
+        _check(node)
+
+    if indications:
+        # If we found something, make sure we agree on all clues.
+        assert len(indications) == 1
+        function_kind = indications.pop()
+    else:
+        function_kind = "Function"
+
+    return function_kind, flags, written_variables, non_local_declarations, global_declarations
 
 
 build_nodes_args3 = None
@@ -106,7 +283,7 @@ def buildNode(provider, node, source_ref, allow_none = False):
         elif kind == "Pass":
             result = None
         else:
-            assert False, kind
+            assert False, ast.dump(node)
 
         if result is None and allow_none:
             return None
@@ -146,7 +323,7 @@ def buildNodeList(provider, nodes, source_ref, allow_none = False):
 
 
 def makeModuleFrame(module, statements, source_ref):
-    assert module.isPythonModule()
+    assert module.isCompiledPythonModule()
 
     if module.isMainModule():
         code_name = "<module>"
@@ -154,19 +331,21 @@ def makeModuleFrame(module, statements, source_ref):
         code_name = module.getName()
 
     return StatementsFrame(
-        statements    = statements,
-        guard_mode    = "once",
-        var_names     = (),
-        arg_count     = 0,
-        kw_only_count = 0,
-        code_name     = code_name,
-        has_starlist  = False,
-        has_stardict  = False,
-        source_ref    = source_ref
+        statements  = statements,
+        guard_mode  = "once",
+        code_object = CodeObjectSpec(
+            code_name     = code_name,
+            code_kind     = "Module",
+            arg_names     = (),
+            kw_only_count = 0,
+            has_starlist  = False,
+            has_stardict  = False,
+        ),
+        source_ref  = source_ref
     )
 
 
-def buildStatementsNode(provider, nodes, source_ref, frame = False):
+def buildStatementsNode(provider, nodes, source_ref, code_object = None):
     # We are not creating empty statement sequences.
     if nodes is None:
         return None
@@ -182,47 +361,51 @@ def buildStatementsNode(provider, nodes, source_ref, frame = False):
         return None
 
     # In case of a frame is desired, build it instead.
-    if frame:
-        if provider.isExpressionFunctionBody():
-            parameters = provider.getParameters()
-
-            arg_names     = parameters.getCoArgNames()
-            kw_only_count = parameters.getKwOnlyParameterCount()
-            code_name     = provider.getFunctionName()
-            guard_mode    = "generator" if provider.isGenerator() else "full"
-            has_starlist  = parameters.getStarListArgumentName() is not None
-            has_stardict  = parameters.getStarDictArgumentName() is not None
-
-            if provider.isGenerator():
-                statements.insert(
-                    0,
-                    StatementGeneratorEntry(
-                        source_ref = source_ref
-                    )
+    if code_object:
+        if provider.isExpressionGeneratorObjectBody():
+            # TODO: Could do this earlier and on the outside.
+            statements.insert(
+                0,
+                StatementGeneratorEntry(
+                    source_ref = source_ref
                 )
+            )
+            result = StatementsFrame(
+                statements  = statements,
+                guard_mode  = "generator",
+                code_object = code_object,
+                source_ref  = source_ref
+            )
+        elif provider.isExpressionCoroutineObjectBody():
+            # TODO: That might be wrong
 
-            return StatementsFrame(
-                statements    = statements,
-                guard_mode    = guard_mode,
-                var_names     = arg_names,
-                arg_count     = len(arg_names),
-                kw_only_count = kw_only_count,
-                code_name     = code_name,
-                has_starlist  = has_starlist,
-                has_stardict  = has_stardict,
-                source_ref    = source_ref
+            result = StatementsFrame(
+                statements  = statements,
+                guard_mode  = "generator",
+                code_object = code_object,
+                source_ref  = source_ref
+            )
+        elif provider.isExpressionFunctionBody() or \
+             provider.isExpressionClassBody():
+            result = StatementsFrame(
+                statements  = statements,
+                guard_mode  = "full",
+                code_object = code_object,
+                source_ref  = source_ref
             )
         else:
-            return makeModuleFrame(
+            result = makeModuleFrame(
                 module     = provider,
                 statements = statements,
                 source_ref = source_ref
             )
     else:
-        return StatementsSequence(
+        result = StatementsSequence(
             statements = statements,
             source_ref = source_ref
         )
+
+    return result
 
 
 def makeStatementsSequenceOrStatement(statements, source_ref):
@@ -279,7 +462,6 @@ def makeStatementsSequenceFromStatements(*statements):
         statements = statements,
         source_ref = statements[0].getSourceReference()
     )
-
 
 
 def makeSequenceCreationOrConstant(sequence_kind, elements, source_ref):
@@ -347,7 +529,7 @@ def makeSequenceCreationOrConstant(sequence_kind, elements, source_ref):
     return result
 
 
-def makeDictCreationOrConstant(keys, values, lazy_order, source_ref):
+def makeDictCreationOrConstant(keys, values, source_ref):
     # Create dictionary node. Tries to avoid it for constant values that are not
     # mutable.
 
@@ -371,20 +553,19 @@ def makeDictCreationOrConstant(keys, values, lazy_order, source_ref):
         # before being marshaled.
         result = ExpressionConstantRef(
             constant      = Constants.createConstantDict(
-                lazy_order = not lazy_order,
-                keys       = [
+                keys   = [
                     key.getConstant()
                     for key in
                     keys
                 ],
-                values     = [
+                values = [
                     value.getConstant()
                     for value in
                     values
                 ]
             ),
-            source_ref    = source_ref,
-            user_provided = True
+            user_provided = True,
+            source_ref    = source_ref
         )
     else:
         result = ExpressionMakeDict(
@@ -397,7 +578,6 @@ def makeDictCreationOrConstant(keys, values, lazy_order, source_ref):
                 for key, value in
                 zip(keys, values)
             ],
-            lazy_order = lazy_order,
             source_ref = source_ref
         )
 

@@ -1,5 +1,5 @@
 #!/usr/bin/python
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -17,7 +17,11 @@
 #     limitations under the License.
 #
 
-import subprocess, re, os, sys, tempfile
+import os
+import re
+import subprocess
+import sys
+import tempfile
 
 _handle, tempfile1 = tempfile.mkstemp()
 

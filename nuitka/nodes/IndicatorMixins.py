@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -34,34 +34,6 @@ class MarkLocalsDictIndicator:
     def markAsLocalsDict(self):
         self.needs_locals_dict = True
 
-
-class MarkGeneratorIndicator:
-    """ Mixin for indication that a function/lambda is a generator.
-
-    """
-
-    def __init__(self):
-        self.is_generator = False
-
-        self.needs_generator_return_exit = False
-
-    def markAsGenerator(self):
-        self.is_generator = True
-
-    def isGenerator(self):
-        return self.is_generator
-
-    def markAsNeedsGeneratorReturnHandling(self, value):
-        self.needs_generator_return_exit = max(
-            self.needs_generator_return_exit,
-            value
-        )
-
-    def needsGeneratorReturnHandling(self):
-        return self.needs_generator_return_exit == 2
-
-    def needsGeneratorReturnExit(self):
-        return bool(self.needs_generator_return_exit)
 
 class MarkUnoptimizedFunctionIndicator:
     """ Mixin for indication that a function contains an exec or star import.

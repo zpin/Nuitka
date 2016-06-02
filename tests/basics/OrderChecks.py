@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Python tests originally created or extracted from other peoples work. The
 #     parts were too small to be protected.
@@ -46,6 +46,21 @@ def dictOrderCheck():
             key2() : value2()
         }
     )
+
+    try:
+        (1/0)[1.0j/0] = (1.0/0)
+    except ZeroDivisionError as e:
+        print("Expected exception caught:", repr(e))
+    try:
+        (1/0)[1.0/0] = 1
+    except ZeroDivisionError as e:
+        print("Expected exception caught:", repr(e))
+    try:
+        (1/0)[1] = (1.0/0)
+    except ZeroDivisionError as e:
+        print("Expected exception caught:", repr(e))
+
+
 
 def listOrderCheck():
     def value1():
@@ -180,6 +195,12 @@ def attributeOrderCheck():
         print("Expected exception caught:", repr(e))
     else:
         assert False
+
+    try:
+        (1/0).x = (1.0/0)
+    except ZeroDivisionError as e:
+        print("Expected exception caught:", repr(e))
+
 
 def compareOrderCheck():
     def lvalue():

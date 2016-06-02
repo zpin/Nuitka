@@ -1,4 +1,4 @@
-//     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+//     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 //
 //     Part of "Nuitka", an optimizing Python compiler that is compatible and
 //     integrates with CPython, but also works on its own.
@@ -18,33 +18,41 @@
 #ifndef __NUITKA_UNFREEZING_H__
 #define __NUITKA_UNFREEZING_H__
 
-// This define guards these definitions from being used without the unfreezing
-// mode actually being active at all.
 
+/* Modes for loading modules, can be compiled, external shared library, or
+ * bytecode. */
 #define NUITKA_COMPILED_MODULE 0
-#define NUITKA_SHLIB_MODULE 1
-#define NUITKA_COMPILED_PACKAGE 2
+#define NUITKA_SHLIB_FLAG 1
+#define NUITKA_PACKAGE_FLAG 2
+#define NUITKA_BYTECODE_FLAG 4
 
 struct Nuitka_MetaPathBasedLoaderEntry
 {
-    // Full module name, including package
+    /* Full module name, including package name. */
     char *name;
 
-    // Entry function if compiled module, otherwise NULL.
+    /* Entry function if compiled module, otherwise NULL. */
 #if PYTHON_VERSION < 300
     void (*python_initfunc)( void );
 #else
     PyObject * (*python_initfunc)( void );
 #endif
 
-    // Flags: NUITKA_COMPILED_MODULE or NUITKA_SHLIB_MODULE
+    unsigned char const *bytecode_str;
+    int bytecode_size;
+
+    /* Flags: Indicators if this is compiled, bytecode or shared library. */
     int flags;
 };
 
-// For embedded modules, to be unpacked. Used by main program/package only
+/* For embedded modules, register the meta path based loader. Used by main
+ * program/package only.
+ */
 extern void registerMetaPathBasedUnfreezer( struct Nuitka_MetaPathBasedLoaderEntry *loader_entries );
 
-// For use as the "__loader__" attribute of compiled modules.
+/* For use as the "__loader__" attribute of compiled modules in newer Python
+ * versions.
+ */
 #if PYTHON_VERSION >= 330
 extern PyObject *metapath_based_loader;
 #endif

@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -29,6 +29,7 @@ compile time constant.
 
 from logging import warning
 
+from nuitka.__past__ import unicode  # pylint: disable=W0622
 from nuitka.importing.Importing import (
     findModule,
     getModuleNameAndKindFromFilename
@@ -54,7 +55,7 @@ class ExpressionImportModule(NodeBase, ExpressionMixin):
     _warned_about = set()
 
     def __init__(self, module_name, import_list, level, source_ref):
-        assert type(module_name) is str, type(module_name)
+        assert type(module_name) in (str, unicode), type(module_name)
 
         NodeBase.__init__(
             self,
@@ -65,10 +66,13 @@ class ExpressionImportModule(NodeBase, ExpressionMixin):
         self.import_list = import_list
         self.level = level
 
-        self.module = None
+        # Are we pointing to a known module or not. If so, we can expect it to
+        # be in the module registry.
+        self.found = None
 
-        self.attempted_recurse = False
-        self.found_modules = ()
+        # If we are pointing to a known module, this are modules behind the
+        # "import_list".
+        self.found_modules = None
 
     def getDetails(self):
         return {
@@ -91,15 +95,6 @@ class ExpressionImportModule(NodeBase, ExpressionMixin):
                 return -1
         else:
             return self.level
-
-    def getModule(self):
-        return self.module
-
-    def setModule(self, module):
-        # Modules have no parent.
-        assert module.parent is None
-
-        self.module = module
 
     def _consider(self, constraint_collection, module_filename, module_package):
         assert module_package is None or \
@@ -159,18 +154,17 @@ Not recursing to '%(full_path)s' (%(filename)s), please specify \
                     )
 
     def _attemptRecursion(self, constraint_collection):
-        assert self.getModule() is None
+        found = False
 
         parent_module = self.getParentModule()
 
-        if parent_module.isPythonPackage():
+        if parent_module.isCompiledPythonPackage():
             parent_package = parent_module.getFullName()
         else:
             parent_package = self.getParentModule().getPackage()
 
         module_package, module_filename, _finding = findModule(
-            importing      = parent_module,
-            source_ref     = self.source_ref,
+            importing      = self,
             module_name    = self.getModuleName(),
             parent_package = parent_package,
             level          = self.getLevel(),
@@ -185,19 +179,19 @@ Not recursing to '%(full_path)s' (%(filename)s), please specify \
             )
 
             if imported_module is not None:
-                self.setModule(imported_module)
+                found = imported_module.getFullName()
+
                 self.found_modules = []
 
                 import_list = self.getImportList()
 
-                if import_list and imported_module.isPythonPackage():
+                if import_list and imported_module.isCompiledPythonPackage():
                     for import_item in import_list:
                         if import_item == '*':
                             continue
 
                         module_package, module_filename, _finding = findModule(
-                            importing      = parent_module,
-                            source_ref     = self.source_ref,
+                            importing      = self,
                             module_name    = import_item,
                             parent_package = imported_module.getFullName(),
                             level          = -1,
@@ -212,25 +206,22 @@ Not recursing to '%(full_path)s' (%(filename)s), please specify \
                             )
 
                             if sub_imported_module is not None:
-                                self.found_modules.append(sub_imported_module)
+                                self.found_modules.append(sub_imported_module.getFullName())
 
+            return found
 
     def computeExpression(self, constraint_collection):
         # Attempt to recurse if not already done.
-        if not self.attempted_recurse:
-            self._attemptRecursion(
+        if self.found is None:
+            self.found = self._attemptRecursion(
                 constraint_collection = constraint_collection
             )
 
-            self.attempted_recurse = True
-
-        if self.getModule() is not None:
-            from nuitka.ModuleRegistry import addUsedModule
-            addUsedModule(self.getModule())
+        if self.found:
+            constraint_collection.onUsedModule(self.found)
 
             for found_module in self.found_modules:
-                addUsedModule(found_module)
-
+                constraint_collection.onUsedModule(found_module)
 
         # When a module is recursed to and included, we know it won't raise,
         # right? But even if you import, that successful import may still raise
@@ -339,7 +330,7 @@ class ExpressionBuiltinImport(ExpressionChildrenHavingBase):
            fromlist.isExpressionConstantRef() and \
            level.isExpressionConstantRef():
 
-            if module_name.isStringConstant():
+            if module_name.isStringConstant() or module_name.isUnicodeConstant():
                 new_node = ExpressionImportModule(
                     module_name = module_name.getConstant(),
                     import_list = fromlist.getConstant(),
@@ -354,18 +345,18 @@ class ExpressionBuiltinImport(ExpressionChildrenHavingBase):
                 return (
                     new_node,
                     "new_import",
-                    "Replaced __import__ call with module import expression."
+                    "Replaced '__import__' call with module import expression."
                 )
             else:
                 # Non-strings is going to raise an error.
                 new_node, change_tags, message = constraint_collection.getCompileTimeComputationResult(
                     node        = self,
                     computation = lambda : __import__(module_name.getConstant()),
-                    description = "Replaced __import__ call with non-string module name argument."
+                    description = "Replaced '__import__' call with non-string module name argument."
                 )
 
                 # Must fail, must not go on when it doesn't.
-                assert change_tags == "new_raise"
+                assert change_tags == "new_raise", module_name
 
                 return new_node, change_tags, message
 
@@ -427,7 +418,9 @@ class ExpressionImportName(ExpressionChildrenHavingBase):
         return self.import_name
 
     def getDetails(self):
-        return { "import_name" : self.getImportName() }
+        return {
+            "import_name" : self.getImportName()
+        }
 
     def getDetail(self):
         return "import %s from %s" % (

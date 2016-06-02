@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -204,10 +204,7 @@ class ExpressionRaiseException(ExpressionChildrenHavingBase):
     def willRaiseException(self, exception_type):
         # One thing is clear, it will raise. TODO: Match exception_type more
         # closely if it is predictable.
-        if exception_type is BaseException:
-            return True
-        else:
-            return False
+        return exception_type is BaseException
 
     getExceptionType = ExpressionChildrenHavingBase.childGetter(
         "exception_type"

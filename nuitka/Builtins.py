@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -24,7 +24,7 @@ import sys
 from types import BuiltinFunctionType, FunctionType, GeneratorType
 
 from nuitka.__past__ import iterItems
-from nuitka.utils.Utils import python_version
+from nuitka.PythonVersions import python_version
 
 
 def _getBuiltinExceptionNames():
@@ -33,7 +33,8 @@ def _getBuiltinExceptionNames():
            builtin_name.endswith("Exception"):
             return True
         elif builtin_name in ("StopIteration", "GeneratorExit", "SystemExit",
-                              "NotImplemented", "KeyboardInterrupt"):
+                              "NotImplemented", "KeyboardInterrupt",
+                              "StopAsyncIteration"):
             return True
         else:
             return False
@@ -87,6 +88,8 @@ assert "AssertionError" in builtin_exception_names
 assert "BaseException" in builtin_exception_names
 assert "Exception" in builtin_exception_names
 assert "NotImplemented" in builtin_exception_names
+
+assert "StopAsyncIteration" in builtin_exception_names or python_version < 350
 
 def _getBuiltinNames():
     names = [

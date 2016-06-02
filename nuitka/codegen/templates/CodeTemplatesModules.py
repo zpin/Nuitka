@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -23,38 +23,40 @@ stuff related to importing, and of course the generated code license.
 """
 
 template_global_copyright = """\
-// Generated code for Python source for module '%(name)s'
-// created by Nuitka version %(version)s
-
-// This code is in part copyright %(year)s Kay Hayen.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/* Generated code for Python source for module '%(name)s'
+ * created by Nuitka version %(version)s
+ *
+ * This code is in part copyright %(year)s Kay Hayen.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 """
 template_module_body_template = """
 #include "nuitka/prelude.hpp"
 
 #include "__helpers.hpp"
 
-// The _module_%(module_identifier)s is a Python object pointer of module type.
+/* The _module_%(module_identifier)s is a Python object pointer of module type. */
 
-// Note: For full compatibility with CPython, every module variable access
-// needs to go through it except for cases where the module cannot possibly
-// have changed in the mean time.
+/* Note: For full compatibility with CPython, every module variable access
+ * needs to go through it except for cases where the module cannot possibly
+ * have changed in the mean time.
+ */
 
 PyObject *module_%(module_identifier)s;
 PyDictObject *moduledict_%(module_identifier)s;
 
-// The module constants used
+/* The module constants used, if any. */
 %(constant_decl_codes)s
 
 static bool constants_created = false;
@@ -106,6 +108,10 @@ static struct PyModuleDef mdef_%(module_identifier)s =
   };
 #endif
 
+#if PYTHON_VERSION >= 300
+extern PyObject *metapath_based_loader;
+#endif
+
 // The exported interface to CPython. On import of the module, this function
 // gets called. It has to have an exact function name, in cases it's a shared
 // library export. This is hidden behind the MOD_INIT_DECL.
@@ -140,6 +146,11 @@ MOD_INIT_DECL( %(module_identifier)s )
     PyType_Ready( &Nuitka_Function_Type );
     PyType_Ready( &Nuitka_Method_Type );
     PyType_Ready( &Nuitka_Frame_Type );
+#if PYTHON_VERSION >= 350
+    PyType_Ready( &Nuitka_Coroutine_Type );
+    PyType_Ready( &Nuitka_CoroutineWrapper_Type );
+#endif
+
 #if PYTHON_VERSION < 300
     _initSlotCompare();
 #endif
@@ -150,11 +161,13 @@ MOD_INIT_DECL( %(module_identifier)s )
     patchBuiltinModule();
     patchTypeComparison();
 
-#endif
-
-#if _NUITKA_MODULE
     // Enable meta path based loader if not already done.
     setupMetaPathBasedLoader();
+
+#if PYTHON_VERSION >= 300
+    patchInspectModule();
+#endif
+
 #endif
 
     createModuleConstants();
@@ -220,11 +233,7 @@ MOD_INIT_DECL( %(module_identifier)s )
     }
 
 #if PYTHON_VERSION >= 330
-#if _MODULE_LOADER
     PyDict_SetItem( module_dict, const_str_plain___loader__, metapath_based_loader );
-#else
-    PyDict_SetItem( module_dict, const_str_plain___loader__, Py_None );
-#endif
 #endif
 
     // Temp variables if any

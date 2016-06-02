@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -18,8 +18,8 @@
 """ Options module """
 
 version_string = """\
-Nuitka V0.5.15
-Copyright (C) 2015 Kay Hayen."""
+Nuitka V0.5.21.3
+Copyright (C) 2016 Kay Hayen."""
 
 import logging
 import sys
@@ -90,7 +90,8 @@ parser.add_option(
     default = True,
     help    = """\
 In standalone mode by default all modules of standard library will be frozen
-as bytecode. As a result compilation time will increase very much.
+as bytecode. This compiles them all and as a result compilation time will
+increase very much.
 """,
     )
 
@@ -695,6 +696,13 @@ if not positional_args:
     sys.exit("""
 Error, need positional argument with python module or main program.""")
 
+if not options.immediate_execution and len(positional_args) > 1:
+    parser.print_help()
+
+    sys.exit("""
+Error, need only one positional argument unless "--run" is specified to
+pass them to the compiled program execution.""")
+
 if options.verbose:
     logging.getLogger().setLevel(logging.DEBUG)
 else:
@@ -706,7 +714,9 @@ else:
 if options.is_standalone:
     options.executable = True
     options.recurse_all = True
-    options.recurse_stdlib = True
+
+    if Utils.getOS() == "NetBSD":
+        logging.warning("Standalone mode on NetBSD is not functional, due to $ORIGIN linkage not being supported.")
 
 def shallTraceExecution():
     return options.trace_execution
@@ -806,7 +816,7 @@ def shallWarnImplicitRaises():
     return options.warn_implicit_exceptions
 
 def isDebug():
-    return options.debug
+    return options.debug or options.debugger
 
 def isPythonDebug():
     return options.python_debug or sys.flags.debug

@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -19,24 +19,30 @@
 
 """
 
-from logging import debug, warning
+import glob
+import sys
+from logging import debug, info, warning
 
 import marshal
 from nuitka import ModuleRegistry, Options
-from nuitka.freezer.BytecodeModuleFreezer import (
-    FrozenModuleDescription,
-    addFrozenModule,
-    isFrozenModule
-)
 from nuitka.importing import ImportCache, Importing, StandardLibrary
-from nuitka.plugins.PluginBase import Plugins
+from nuitka.plugins.Plugins import Plugins
+from nuitka.PythonVersions import python_version
 from nuitka.tree.SourceReading import readSourceCodeFromFilename
 from nuitka.utils import Utils
+
+
+def logRecursion(*args):
+    if Options.isShowInclusion():
+        info(*args)
+    else:
+        debug(*args)
 
 
 def recurseTo(module_package, module_filename, module_relpath, module_kind,
              reason):
     from nuitka.tree import Building
+    from nuitka.nodes.ModuleNodes import makeUncompiledPythonModule
 
     if not ImportCache.isImportedModuleByPath(module_relpath):
         module, source_ref, source_filename = Building.decideModuleTree(
@@ -50,8 +56,8 @@ def recurseTo(module_package, module_filename, module_relpath, module_kind,
         # Check if the module name is known. In order to avoid duplicates,
         # learn the new filename, and continue build if its not.
         if not ImportCache.isImportedModuleByName(module.getFullName()):
-            debug(
-                "Recurse to import '%s' from %s. (%s)",
+            logRecursion(
+                "Recurse to import '%s' from '%s'. (%s)",
                 module.getFullName(),
                 module_relpath,
                 reason
@@ -94,36 +100,29 @@ Cannot recurse to import module '%s' (%s) because code is too complex.""",
 
 
                         if Options.isStandaloneMode():
-                            addFrozenModule(
-                                FrozenModuleDescription(
-                                    module_name = module.getFullName(),
-                                    bytecode    = marshal.dumps(
-                                        compile(
-                                            readSourceCodeFromFilename(module.getFullName(), module_filename),
-                                            module_filename,
-                                            "exec"
-                                        )
-                                    ),
-                                    is_package  = module.isPythonPackage(),
-                                    filename    = module_filename,
-                                    is_late     = True
-                                )
+                            module = makeUncompiledPythonModule(
+                                module_name   = module.getFullName(),
+                                filename      = module_filename,
+                                bytecode      = marshal.dumps(
+                                    compile(
+                                        readSourceCodeFromFilename(module.getFullName(), module_filename),
+                                        module_filename,
+                                        "exec"
+                                    )
+                                ),
+                                is_package    = module.isCompiledPythonPackage(),
+                                user_provided = True,
+                                technical     = False
                             )
+
+                            ModuleRegistry.addUncompiledModule(module)
 
                     return None, False
 
-            ImportCache.addImportedModule(
-                module_relpath,
-                module
-            )
+            ImportCache.addImportedModule(module)
 
             is_added = True
         else:
-            ImportCache.addImportedModule(
-                module_relpath,
-                ImportCache.getImportedModuleByName(module.getFullName())
-            )
-
             module = ImportCache.getImportedModuleByName(
                 module.getFullName()
             )
@@ -137,8 +136,7 @@ Cannot recurse to import module '%s' (%s) because code is too complex.""",
         return ImportCache.getImportedModuleByPath(module_relpath), False
 
 
-def decideRecursion(module_filename, module_name, module_package,
-                    module_kind):
+def decideRecursion(module_filename, module_name, module_package, module_kind):
     # Many branches, which make decisions immediately, by returning
     # pylint: disable=R0911,R0912
     Plugins.onModuleEncounter(
@@ -147,7 +145,6 @@ def decideRecursion(module_filename, module_name, module_package,
         module_package,
         module_kind
     )
-
 
     if module_kind == "shlib":
         if Options.isStandaloneMode():
@@ -159,9 +156,6 @@ def decideRecursion(module_filename, module_name, module_package,
         full_name = module_name
     else:
         full_name = module_package + '.' + module_name
-
-    if isFrozenModule(full_name, module_filename):
-        return False, "Module is frozen."
 
     no_case_modules = Options.getShallFollowInNoCase()
 
@@ -220,10 +214,7 @@ def decideRecursion(module_filename, module_name, module_package,
     )
 
 
-def considerFilename(module_filename, module_package):
-    assert module_package is None or \
-           ( type(module_package) is str and module_package != "" )
-
+def considerFilename(module_filename):
     module_filename = Utils.normpath(module_filename)
 
     if Utils.isDir(module_filename):
@@ -260,86 +251,90 @@ def _checkPluginPath(plugin_filename, module_package):
         module_package
     )
 
-    plugin_info = considerFilename(
-        module_package  = module_package,
-        module_filename = plugin_filename
-    )
+    module_name, module_kind = Importing.getModuleNameAndKindFromFilename(plugin_filename)
 
-    if plugin_info is not None:
-        module, is_added = recurseTo(
-            module_filename = plugin_info[0],
-            module_relpath  = plugin_info[1],
+    if module_kind is not None:
+        decision, _reason = decideRecursion(
+            module_filename = plugin_filename,
+            module_name     = module_name,
             module_package  = module_package,
-            module_kind     = "py",
-            reason          = "Lives in plug-in directory."
+            module_kind     = module_kind
         )
 
-        if module:
-            if not is_added:
-                warning(
-                    "Recursed to %s '%s' at '%s' twice.",
-                    "package" if module.isPythonPackage() else "module",
-                    module.getName(),
-                    plugin_info[0]
-                )
+        if decision:
+            module_relpath = Utils.relpath(plugin_filename)
 
-                if not isSameModulePath(module.getFilename(), plugin_info[0]):
-                    warning(
-                        "Duplicate ignored '%s'.",
-                        plugin_info[1]
-                    )
-
-                    return
-
-            debug(
-                "Recursed to %s %s %s",
-                module.getName(),
-                module.getPackage(),
-                module
+            module, is_added = recurseTo(
+                module_filename = plugin_filename,
+                module_relpath  = module_relpath,
+                module_package  = module_package,
+                module_kind     = "py",
+                reason          = "Lives in plug-in directory."
             )
 
-            if module.isPythonPackage():
-                package_filename = module.getFilename()
+            if module:
+                if not is_added:
+                    warning(
+                        "Recursed to %s '%s' at '%s' twice.",
+                        "package" if module.isCompiledPythonPackage() else "module",
+                        module.getName(),
+                        plugin_filename
+                    )
 
-                if Utils.isDir(package_filename):
-                    # Must be a namespace package.
-                    assert Utils.python_version >= 330
+                    if not isSameModulePath(module.getFilename(), plugin_filename):
+                        warning(
+                            "Duplicate ignored '%s'.",
+                            plugin_filename
+                        )
 
-                    package_dir = package_filename
-
-                    # Only include it, if it contains actual modules, which will
-                    # recurse to this one and find it again.
-                    useful = False
-                else:
-                    package_dir = Utils.dirname(package_filename)
-
-                    # Real packages will always be included.
-                    useful = True
+                        return
 
                 debug(
-                    "Package directory %s",
-                    package_dir
+                    "Recursed to %s %s %s",
+                    module.getName(),
+                    module.getPackage(),
+                    module
                 )
 
+                ImportCache.addImportedModule(module)
 
-                for sub_path, sub_filename in Utils.listDir(package_dir):
-                    if sub_filename in ("__init__.py", "__pycache__"):
-                        continue
+                if module.isCompiledPythonPackage():
+                    package_filename = module.getFilename()
 
-                    assert sub_path != plugin_filename
+                    if Utils.isDir(package_filename):
+                        # Must be a namespace package.
+                        assert python_version >= 330
 
-                    if Importing.isPackageDir(sub_path) or \
-                       sub_path.endswith(".py"):
-                        _checkPluginPath(sub_path, module.getFullName())
+                        package_dir = package_filename
+
+                        # Only include it, if it contains actual modules, which will
+                        # recurse to this one and find it again.
+                    else:
+                        package_dir = Utils.dirname(package_filename)
+
+                        # Real packages will always be included.
+                        ModuleRegistry.addRootModule(module)
+
+                    debug(
+                        "Package directory %s",
+                        package_dir
+                    )
+
+                    for sub_path, sub_filename in Utils.listDir(package_dir):
+                        if sub_filename in ("__init__.py", "__pycache__"):
+                            continue
+
+                        assert sub_path != plugin_filename
+
+                        if Importing.isPackageDir(sub_path) or \
+                           sub_path.endswith(".py"):
+                            _checkPluginPath(sub_path, module.getFullName())
+
+                elif module.isCompiledPythonModule():
+                    ModuleRegistry.addRootModule(module)
+
             else:
-                # Modules should always be included.
-                useful = True
-
-            if useful:
-                ModuleRegistry.addRootModule(module)
-
-        else:
-            warning("Failed to include module from '%s'.", plugin_info[0])
+                warning("Failed to include module from '%s'.", plugin_filename)
 
 
 def checkPluginPath(plugin_filename, module_package):
@@ -350,7 +345,6 @@ def checkPluginPath(plugin_filename, module_package):
     )
 
     plugin_info = considerFilename(
-        module_package  = module_package,
         module_filename = plugin_filename
     )
 
@@ -373,8 +367,6 @@ def checkPluginPath(plugin_filename, module_package):
 
 
 def checkPluginFilenamePattern(pattern):
-    import sys, glob
-
     debug(
         "Checking plug-in pattern '%s':",
         pattern,

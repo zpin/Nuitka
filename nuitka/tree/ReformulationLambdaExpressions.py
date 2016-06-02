@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -33,43 +33,80 @@ from nuitka.nodes.ConditionalNodes import StatementConditional
 from nuitka.nodes.ConstantRefNodes import ExpressionConstantRef
 from nuitka.nodes.FrameNodes import StatementsFrame
 from nuitka.nodes.FunctionNodes import (
-    ExpressionFunctionBody,
     ExpressionFunctionCreation,
     ExpressionFunctionRef
+)
+from nuitka.nodes.GeneratorNodes import (
+    ExpressionGeneratorObjectBody,
+    ExpressionMakeGeneratorObject
 )
 from nuitka.nodes.ReturnNodes import StatementReturn
 from nuitka.nodes.StatementNodes import StatementExpressionOnly
 from nuitka.nodes.YieldNodes import ExpressionYield
-from nuitka.utils import Utils
+from nuitka.PythonVersions import python_version
 
 from .Helpers import (
     buildNode,
     buildNodeList,
+    detectFunctionBodyKind,
     getKind,
     makeStatementsSequenceFromStatement,
     mergeStatements
 )
 from .ReformulationFunctionStatements import (
+    buildFunctionWithParsing,
     buildParameterAnnotations,
-    buildParameterKwDefaults,
-    buildParameterSpec
+    buildParameterKwDefaults
 )
 from .ReformulationTryFinallyStatements import makeTryFinallyStatement
 
 
 def buildLambdaNode(provider, node, source_ref):
+    # Many details to deal with, pylint: disable=R0914
+
     assert getKind(node) == "Lambda"
 
-    parameters = buildParameterSpec(provider, "<lambda>", node, source_ref)
-
-    function_body = ExpressionFunctionBody(
-        provider   = provider,
-        name       = "<lambda>",
-        doc        = None,
-        parameters = parameters,
-        is_class   = False,
-        source_ref = source_ref,
+    function_kind, flags, _written_variables, _non_local_declarations, _global_declarations = \
+      detectFunctionBodyKind(
+        nodes = (node.body,)
     )
+
+    outer_body, function_body, code_object = buildFunctionWithParsing(
+        provider      = provider,
+        function_kind = function_kind,
+        name          = "<lambda>",
+        function_doc  = None,
+        flags         = flags,
+        node          = node,
+        source_ref    = source_ref
+    )
+
+    if function_kind == "Function":
+        code_body = function_body
+    else:
+        code_body = ExpressionGeneratorObjectBody(
+            provider   = function_body,
+            name       = "<lambda>",
+            flags      = set(),
+            source_ref = source_ref
+        )
+
+    if function_kind == "Generator":
+        function_body.setBody(
+            makeStatementsSequenceFromStatement(
+                statement = StatementReturn(
+                    expression = ExpressionMakeGeneratorObject(
+                        generator_ref = ExpressionFunctionRef(
+                            function_body = code_body,
+                            source_ref    = source_ref
+                        ),
+                        code_object   = code_object,
+                        source_ref    = source_ref
+                    ),
+                    source_ref = source_ref
+                )
+            )
+        )
 
     defaults = buildNodeList(provider, node.args.defaults, source_ref)
     kw_defaults = buildParameterKwDefaults(
@@ -80,14 +117,14 @@ def buildLambdaNode(provider, node, source_ref):
     )
 
     body = buildNode(
-        provider   = function_body,
+        provider   = code_body,
         node       = node.body,
         source_ref = source_ref,
     )
 
-    if function_body.isGenerator():
-        if Utils.python_version < 270:
-            tmp_return_value = function_body.allocateTempVariable(
+    if function_kind == "Generator":
+        if python_version < 270:
+            tmp_return_value = code_body.allocateTempVariable(
                 temp_scope = None,
                 name       = "yield_return"
             )
@@ -150,17 +187,12 @@ def buildLambdaNode(provider, node, source_ref):
         )
 
     body = StatementsFrame(
-        statements    = mergeStatements(
+        statements  = mergeStatements(
             (body,)
         ),
-        guard_mode    = "generator" if function_body.isGenerator() else "full",
-        var_names     = parameters.getCoArgNames(),
-        arg_count     = parameters.getArgumentCount(),
-        kw_only_count = parameters.getKwOnlyParameterCount(),
-        has_starlist  = parameters.getStarListArgumentName() is not None,
-        has_stardict  = parameters.getStarDictArgumentName() is not None,
-        code_name     = "<lambda>",
-        source_ref    = body.getSourceReference()
+        code_object = code_object,
+        guard_mode  = "generator" if function_kind == "Generator" else "full",
+        source_ref  = body.getSourceReference()
     )
 
 
@@ -168,15 +200,16 @@ def buildLambdaNode(provider, node, source_ref):
         statement = body,
     )
 
-    function_body.setBody(body)
+    code_body.setBody(body)
 
     annotations = buildParameterAnnotations(provider, node, source_ref)
 
     return ExpressionFunctionCreation(
         function_ref = ExpressionFunctionRef(
-            function_body = function_body,
+            function_body = outer_body,
             source_ref    = source_ref
         ),
+        code_object  = code_object,
         defaults     = defaults,
         kw_defaults  = kw_defaults,
         annotations  = annotations,

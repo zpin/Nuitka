@@ -1,5 +1,5 @@
 # -*- python -*-
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -51,9 +51,12 @@ VariantDir(static_src, os.path.join(nuitka_src, "static_src"), 0)  # @UndefinedV
 # The name of executable or extension module that we produce.
 result_basepath = ARGUMENTS["result_name"]
 
-def getBoolOption(option_name, default):
+def getBoolOption(option_name, default = None):
     """ Small helper for boolean mode flags."""
-    value = ARGUMENTS.get(option_name, "True" if default else "False")
+    if default is None:
+        value = ARGUMENTS[option_name]
+    else:
+        value = ARGUMENTS.get(option_name, "True" if default else "False")
 
     return value.lower() in ("yes", "true", '1')
 
@@ -94,8 +97,9 @@ trace_mode = getBoolOption("trace_mode", False)
 # support, the compiled result would not run correctly.
 lto_mode = getBoolOption("lto_mode", False)
 
-# Windows target mode: Compile for Windows.
-win_target = getBoolOption("win_target", os.name == "nt")
+# Windows target mode: Compile for Windows. Used to be an option, but we
+# no longer cross compile this way.
+win_target = os.name == "nt"
 
 # Windows subsystem mode: Disable console for windows builds.
 win_disable_console = getBoolOption("win_disable_console", False)
@@ -142,13 +146,31 @@ icon_path = ARGUMENTS.get("icon_path", None)
 # Forced MSVC version (windows-only)
 msvc_version = ARGUMENTS.get("msvc_version", None)
 
+no_python_warnings = getBoolOption("no_python_warnings", False)
+
+# sys.flags values to pass along
+# python_sysflag_py3k_warning
+python_sysflag_py3k_warning = getBoolOption("python_sysflag_py3k_warning", False)
+# python_sysflag_division_warning
+python_sysflag_division_warning = getBoolOption("python_sysflag_division_warning", False)
+# python_sysflag_division_warning
+python_sysflag_bytes_warning = getBoolOption("python_sysflag_bytes_warning", False)
+# python_sysflag_no_site
+python_sysflag_no_site = getBoolOption("python_sysflag_no_site", False)
+# python_sysflag_verbose
+python_sysflag_verbose = getBoolOption("python_sysflag_verbose", False)
+# python_sysflag_unicode
+python_sysflag_unicode = getBoolOption("python_sysflag_unicode", False)
+
+
 # Amount of jobs to use.
 job_count = GetOption("num_jobs")  # @UndefinedVariable
 
-# Self-compiled Windows has different paths somewhat.
-win_from_source_mode = win_target and \
-                       os.path.exists(os.path.join(python_prefix, "PCBuild"))
+if "CXX" in os.environ:
+    cxx_dirname = os.path.dirname(os.environ["CXX"])
 
+    if os.path.isdir(cxx_dirname):
+        os.environ["PATH"] = os.pathsep.join([ cxx_dirname ] + os.environ["PATH"].split(os.pathsep))
 
 def getExecutablePath(filename, initial):
     """ Find an execute in either normal PATH, or Scons detected PATH. """
@@ -159,7 +181,7 @@ def getExecutablePath(filename, initial):
         filename = env[filename[1:]]
 
     # Append ".exe" suffix  on Windows if not already present.
-    if os.name == "nt" and not filename.lower().endswith(".exe"):
+    if win_target and not filename.lower().endswith(".exe"):
         filename += ".exe"
 
     # Either look at the initial "PATH" as given from the outside or look at the
@@ -186,7 +208,7 @@ def createEnvironment(compiler_tools):
 
     # If we are on Windows, and MinGW is not enforced, lets see if we can
     # find "cl.exe", and if we do, disable automatic scan.
-    if os.name == "nt" and \
+    if win_target and \
        not mingw_mode and \
        (getExecutablePath("cl", initial = True) is not None or \
         getExecutablePath("gcc", initial = True) is not None):
@@ -229,7 +251,7 @@ env = createEnvironment(
 # On Windows, in case MSVC was not found and not previously forced, retry with
 # it and use that instead then as a fallback. Using both tools in one call
 # seems to not work in terms of fallback when both exist.
-if os.name == "nt" and \
+if win_target and \
    compiler_tools == ["default"] and \
    getExecutablePath(env["CXX"], initial = False) is None:
     env = createEnvironment(
@@ -277,7 +299,6 @@ def setupSpawn(env):
             args[1:]
         )
         cmdline = cmd + ' ' + newargs
-        startupinfo = subprocess.STARTUPINFO()
 
         # Remove useless quoted include directories to "windres", which does not
         # handle them properly in its command line parsing, while they are not
@@ -285,20 +306,11 @@ def setupSpawn(env):
         if cmd == "windres":
             cmdline = re.sub('--include-dir ".*?"', "", cmdline)
 
-        # CPython2.6 compatibility
-        try:
-            from subprocess import STARTF_USESHOWWINDOW
-        except ImportError:
-            from _subprocess import STARTF_USESHOWWINDOW
-
-        startupinfo.dwFlags |= STARTF_USESHOWWINDOW
-
         proc = subprocess.Popen(
             cmdline,
             stdin       = subprocess.PIPE,
             stdout      = subprocess.PIPE,
             stderr      = subprocess.PIPE,
-            startupinfo = startupinfo,
             shell       = False,
             env         = env
         )
@@ -358,25 +370,47 @@ def setupSpawn(env):
     env["SPAWN"] = spawn
 
 def getGccVersion():
-    # Update CXXVERSION in env, after we changed it.
-    import SCons  # @UnresolvedImport
+    try:
+        proc = subprocess.Popen(
+            ["gcc", "-v"],
+            stdin       = subprocess.PIPE,
+            stdout      = subprocess.PIPE,
+            stderr      = subprocess.PIPE,
+            shell       = False,
+        )
+    except OSError:
+        return None, None
 
-    pipe = SCons.Action._subproc(
-        env,
-        [env["CXX"], "--version"],
-        stdin  = "devnull",
-        stderr = "devnull",
-        stdout = subprocess.PIPE
-    )
+    _stdout, stderr = proc.communicate()
+    _rv = proc.wait()
 
-    line = pipe.stdout.readline()
+    lines = stderr.splitlines()
 
-    match = re.search(r'[0-9]+(\.[0-9]+){2}', line)
+    version = None
+    arch = None
 
-    if match:
-        return match.group(0)
-    else:
-        return None
+    if lines:
+        line = lines[-1]
+
+        match = re.search(r'[0-9]+(\.[0-9]+){2}', line)
+
+        if match:
+            version = match.group(0)
+
+        for line in lines:
+            if line.startswith("Target: "):
+                arch = line.split(": ", 2)[1]
+
+                if win_target:
+                    if "i686" in arch:
+                        arch = "x86"
+                    elif "x86_64" in arch:
+                        arch = "x86_64"
+                    else:
+                        arch = None
+
+    return version, arch
+
 
 def getClangVersion():
     import SCons # @UnresolvedImport
@@ -412,19 +446,23 @@ orig_cxx_version = env.get("CXXVERSION", None)
 # Remove "g++" as the compiler, in case it's not really existing or not high
 # enough version.
 if "g++" in (env["CXX"] or "") and "clang" not in (env["CXX"] or ""):
-    gpp_version = getGccVersion()
+    gpp_version, compiler_arch = getGccVersion()
 
     if gpp_version is None or int(gpp_version.replace('.', "")) < 440:
         env["CXX"] = None
+    elif win_target and compiler_arch != target_arch:
+        env["CXX"] = None
+
 
 # Detect compiler to be used from supported ones, if there is no usable g++
 # link.
-if os.name != "nt" and env["CXX"] is None:
-    # Try out the Debian names, as no "gcc" default compiler package needs to
-    # be installed.
+if not win_target and env["CXX"] is None:
+    # Try out the Debian/EPEL names, so no "gcc" default compiler package needs
+    # to be installed or might be ignored due to too low version.
 
-    for candidate in ("g++-5.1", "g++-4.9", "g++-4.8", "g++-4.7", "g++-4.6",
-                      "g++-4.5", "g++-4.4", "g++44", "clang", "eg++"):
+    for candidate in ("g++-6.1", "g++-5.3", "g++-5.1", "g++-4.9", "g++-4.8",
+                      "g++-4.7", "g++-4.6", "g++-4.5", "g++-4.4", "g++44",
+                      "clang", "eg++"):
 
         for system_path in ("/usr/bin", "/usr/local/bin"):
             if os.path.exists(os.path.join(system_path, candidate)):
@@ -433,7 +471,7 @@ if os.name != "nt" and env["CXX"] is None:
 
                 if "clang" not in candidate:
                     # Update CXXVERSION in env, after we changed it.
-                    env["CXXVERSION"] = getGccVersion()
+                    env["CXXVERSION"] = getGccVersion()[0]
 
                 break
 
@@ -447,7 +485,7 @@ version (>= 4.4).""" % (orig_cxx, orig_cxx_version))
 
 if env["CXX"] is None or \
    getExecutablePath(env["CXX"], initial = False) is None:
-    if os.name == "nt":
+    if win_target:
         sys.exit("""\
 Error, cannot locate suitable C++ compiler. You have the following options:
 
@@ -459,9 +497,9 @@ b) To make it find Visual Studio execute from Start Menu the 'Visual Studio
    Command Prompt' or "vcvarsall.bat". That will add Visual Studio to the
    PATH. And it will be detected.
 
-c) Install MinGW to 'C:\\MinGW' then it is automatically picked up. But be
-   sure to pick the proper variant (32/64 bits, your Python arch is '%s'). If
-   you have it installed, using the matching Python will help.
+c) Install MinGW64 to 'C:\\MinGW64' or '\\MinGW', where then it is automatically
+   detected or add it to PATH before executing Nuitka. But be sure to pick the
+   proper variant (32/64 bits, your Python arch is '%s').
 """ % (sys.exec_prefix, target_arch))
     else:
         sys.exit("Error, cannot locate suitable C++ compiler.")
@@ -486,12 +524,12 @@ if show_scons_mode:
     print "Scons compiler: Using",
     print getExecutablePath(env["CXX"], initial = False),
 
-    if os.name == "nt" and msvc_mode:
+    if win_target and msvc_mode:
         print "(MSVC %s)" % getMsvcVersionString()
 
     print
 
-if os.name == "nt":
+if win_target:
     setupSpawn(env)
 
 env["BUILD_DIR"] = source_dir
@@ -547,7 +585,7 @@ if "g++" in env["CXX"] and "clang" not in env["CXX"]:
 
     if env.get("CXXVERSION", None) is None or \
        env.get("CXXVERSION").count('.') < 2:
-        env["CXXVERSION"] = getGccVersion()
+        env["CXXVERSION"] = getGccVersion()[0]
 
     # Version dependent options.
     gpp_version = int(env["CXXVERSION"].replace('.', ""))
@@ -623,6 +661,12 @@ version for lto mode (>= 4.6).""" % (env[ "CXX" ], env[ "CXXVERSION" ]))
 if msvc_mode:
     env.Append(CCFLAGS = ["/EHsc", "/J", "/Gd"])
     env.Append(LINKFLAGS = ["/INCREMENTAL:NO"])
+
+    # Stack size 4MB or 8MB, we need more than the default 1MB.
+    if target_arch == "x86_64":
+        env.Append(CCFLAGS = ["/F8388608"])
+    else:
+        env.Append(CCFLAGS = ["/F4194304"])
 
 # The 32 bits MinGW does not default for API level properly, so help it.
 if mingw_mode:
@@ -706,6 +750,38 @@ if standalone_mode:
             LIBS = ["dl"]
         )
 
+if no_python_warnings:
+    env.Append(
+        CPPDEFINES = ["_NUITKA_NO_PYTHON_WARNINGS"]
+    )
+
+if python_version < "3":
+    env.Append(
+        CPPDEFINES = ["_NUITKA_SYSFLAG_PY3K_WARNING=%d" % (1 if python_sysflag_py3k_warning else 0)]
+    )
+
+    env.Append(
+        CPPDEFINES = ["_NUITKA_SYSFLAG_DIVISION_WARNING=%d" % (1 if python_sysflag_division_warning else 0)]
+    )
+
+    env.Append(
+        CPPDEFINES = ["_NUITKA_SYSFLAG_UNICODE=%d" % (1 if python_sysflag_unicode else 0)]
+    )
+
+env.Append(
+    CPPDEFINES = ["_NUITKA_SYSFLAG_BYTES_WARNING=%d" % (1 if python_sysflag_bytes_warning else 0)]
+)
+
+env.Append(
+    CPPDEFINES = ["_NUITKA_SYSFLAG_NO_SITE=%d" % (1 if python_sysflag_no_site else 0)]
+)
+
+env.Append(
+    CPPDEFINES = ["_NUITKA_SYSFLAG_VERBOSE=%d" % (1 if python_sysflag_verbose else 0)]
+)
+
+
+
 if win_target:
     # For MinGW and cross compilation, we need to tell the subsystem
     # to target as well as to automatically import everything used.
@@ -719,14 +795,20 @@ if win_target:
                 LINKFLAGS = ["-Wl,--subsystem,windows"]
             )
 
+    if win_disable_console:
+        env.Append(
+            CPPDEFINES = ["_NUITKA_WINMAIN_ENTRY_POINT"]
+        )
+
     # This is used for "PathRemoveFileSpec" used in Windows code.
     env.Append(
         LIBS = ["Shlwapi"]
     )
 
-    if win_disable_console:
+    # This is used for "GetCommandLineW" used in Windows code for Python3.
+    if python_version >= "3":
         env.Append(
-            CPPDEFINES = ["_NUITKA_WINMAIN_ENTRY_POINT"]
+            LIBS = ["Shell32"]
         )
 
 if python_debug:
@@ -764,7 +846,7 @@ if gcc_mode and "linux" in sys.platform:
 # about building, and finding the headers to compile against that Python, we
 # do not care about any site packages, and so on.
 
-if os.name != "nt" and os.path.islink(os.path.join(python_prefix, ".Python")):
+if not win_target and os.path.islink(os.path.join(python_prefix, ".Python")):
     # Some virtualenv, at least on MacOS, have such handy links.
     python_prefix = os.path.normpath(
         os.path.join(
@@ -772,7 +854,7 @@ if os.name != "nt" and os.path.islink(os.path.join(python_prefix, ".Python")):
             ".."
         )
     )
-elif os.name != "nt" and python_version >= "3.3" and \
+elif not win_target and python_version >= "3.3" and \
      os.path.exists(os.path.join(python_prefix, "bin/activate")):
     # For "venv" of Python3.3, it seems necessary to find include files
     # and libraries on the outside.
@@ -794,7 +876,7 @@ elif os.path.exists(os.path.join(python_prefix, "Lib/orig-prefix.txt")):
     # Trailing spaces in the python prefix, please not.
     assert python_prefix == python_prefix.strip()
 
-if os.name == "nt":
+if win_target:
     # On Windows, the installation layout is relatively fixed.
     python_header_path = os.path.join(python_prefix, "include")
 else:
@@ -824,118 +906,114 @@ env.Append(CPPPATH = [python_header_path])
 
 # To support self built Python on Windows, need to also add the "PC" directory,
 # that a normal install won't have.
-if win_from_source_mode:
-    env.Append(CPPPATH = [os.path.join(python_prefix, "PC")])
+env.Append(CPPPATH = [os.path.join(python_prefix, "PC")])
+
+
+def getWindowsPythonDLLPath():
+    return os.environ["NUITKA_PYTHON_DLL_PATH"]
+
+def makeWindowsMingGW64Lib(win_lib_path):
+    # Create the LIB in the build directory.
+    new_win_lib_path = os.path.join(source_dir, "libs")
+
+    if not os.path.exists(new_win_lib_path):
+        os.makedirs(new_win_lib_path)
+
+    gendef_tool = os.path.join(
+        os.path.dirname(
+            getExecutablePath(env["CXX"], initial = False)
+        ),
+        "gendef"
+    )
+
+    command = [gendef_tool, "-", getWindowsPythonDLLPath()]
+
+    if show_scons_mode:
+        print "Scons: Creating Python library defs with:", command
+
+    try:
+        proc = subprocess.Popen(
+            command,
+            stdin       = subprocess.PIPE,
+            stdout      = subprocess.PIPE,
+            stderr      = subprocess.PIPE,
+            shell       = False
+        )
+    except WindowsError:
+        sys.exit('Error, cannot find "gendef.exe" which is required though.')
+
+    defs, stderr = proc.communicate()
+    rv = proc.wait()
+
+    if rv != 0:
+        sys.exit('Error, unexpected error from "gendef.exe" %s.' % stderr)
+
+    defs_filename = os.path.join(
+        new_win_lib_path,
+        "python%s.defs" % python_version.replace('.', "")
+    )
+
+    defs_file = open(
+        defs_filename,
+        'w'
+    )
+    defs_file.write(defs)
+    defs_file.close()
+
+    shutil.copy(
+        getWindowsPythonDLLPath(),
+        new_win_lib_path
+    )
+
+    lib_filename = os.path.join(
+        new_win_lib_path,
+        "libpython%s.a" % python_version.replace('.', "")
+    )
+
+    dll_tool = os.path.join(
+        os.path.dirname(
+            getExecutablePath(env["CXX"], initial = False)
+        ),
+        "dlltool"
+    )
+
+    result = subprocess.call(
+        (
+            dll_tool,
+            "-d",
+            defs_filename,
+            "-l",
+            lib_filename
+        ),
+        stdout = subprocess.PIPE
+    )
+
+    if result != 0:
+        sys.exit("Error, call to 'dlltool.exe' failed.")
+
+    return new_win_lib_path
 
 
 if win_target:
     # MinGW for 64 bits needs this due to CPython being compiled with MSVC.
-
-    if win_from_source_mode:
-        win_lib_path = os.path.join(python_prefix, "PCBuild")
+    if python_debug:
+        win_lib_name ="python" + python_version.replace('.', "") + "_d"
     else:
-        win_lib_path = os.path.join(python_prefix, "libs")
+        win_lib_name = "python" + python_version.replace('.', "")
 
-    if os.name == "nt" and target_arch == "x86_64" and gcc_mode:
-        new_win_lib_path = os.path.join(source_dir, "libs")
-        if not os.path.exists(new_win_lib_path):
-            os.makedirs(new_win_lib_path)
+    for candidate in ("libs", "PCBuild"):
+        win_lib_path = os.path.join(python_prefix, candidate)
 
-        command = r"gendef - %s\SysWOW64\python%s.dll" % (
-                os.environ["WINDIR"],
-                python_version.replace('.', "")
-            )
+        if os.path.exists(os.path.join(win_lib_path, win_lib_name + ".lib")):
+            break
+    else:
+        sys.exit("Error, cannot find '%s.lib' file." % win_lib_name)
 
-        defs_filename = os.path.join(
-            new_win_lib_path,
-            "python%s.defs" % python_version.replace('.', "")
-        )
-        defs_file = open(
-            defs_filename,
-            'w'
-        )
-
-        startupinfo = subprocess.STARTUPINFO()
-
-        # CPython2.6 compatibility
-        try:
-            from subprocess import STARTF_USESHOWWINDOW
-        except ImportError:
-            from _subprocess import STARTF_USESHOWWINDOW
-
-        startupinfo.dwFlags |= STARTF_USESHOWWINDOW
-
-        proc = subprocess.Popen(
-            command,
-            stdin       = subprocess.PIPE,
-            stdout      = defs_file,
-            stderr      = subprocess.PIPE,
-            startupinfo = startupinfo,
-            shell       = False
-        )
-
-        data, err = proc.communicate()
-        rv = proc.wait()
-
-        assert rv == 0
-
-        defs_file.close()
-        defs_file = open(
-            defs_filename,
-            'r'
-        )
-        defs = defs_file.read()
-        defs_file.close()
-        defs_file = open(
-            defs_filename,
-            'w'
-        )
-        defs_file.write(defs.replace("Py_InitModule4", "Py_InitModule4_64"))
-        defs_file.close()
-
-        shutil.copy(
-            r"%s\SysWOW64\python%s.dll" % (
-                os.environ["WINDIR"],
-                python_version.replace('.', "")
-            ),
-            new_win_lib_path
-        )
-
-        lib_filename = os.path.join(
-            new_win_lib_path,
-            "libpython%s.a" % python_version.replace('.', "")
-        )
-
-        dll_tool = os.path.join(
-            os.path.dirname(
-                getExecutablePath(env["CXX"], initial = False)
-            ),
-            "dlltool"
-        )
-
-        result = subprocess.call(
-            (
-                dll_tool,
-                "-d",
-                defs_filename,
-                "-l",
-                lib_filename
-            ),
-            stdout = subprocess.PIPE
-        )
-
-        if result != 0:
-            sys.exit("Error, call to 'dlltool.exe' failed.")
-
-        win_lib_path = new_win_lib_path
+    if target_arch == "x86_64" and gcc_mode:
+        win_lib_path = makeWindowsMingGW64Lib(win_lib_path)
 
     env.Append(LIBPATH = [win_lib_path])
-
-    if python_debug:
-        env.Append(LIBS = ["python" + python_version.replace('.', "") + "_d"])
-    else:
-        env.Append(LIBS = ["python" + python_version.replace('.', "")])
-
+    env.Append(LIBS = [win_lib_name])
 
 else:
     # Debian and Ubuntu distinguish the system libraries like this.
@@ -1051,13 +1129,14 @@ if optimize_mode:
         )
 
 # MinGW for 64 bits needs this due to CPython bugs.
-if os.name == "nt" and target_arch == "x86_64" and gcc_mode:
+if win_target and target_arch == "x86_64" and gcc_mode:
     env.Append(CPPDEFINES = ["MS_WIN64"])
 
 # Set load libpython from binary directory default
 if standalone_mode and gcc_mode and sys.platform != "darwin":
     env.Append(
-        LINKFLAGS = ["-Wl,-R,'$$ORIGIN'"])
+        LINKFLAGS = ["-Wl,-R,'$$ORIGIN'"]
+    )
 
 def getLinkerArch():
     if "linux" in sys.platform:
@@ -1162,11 +1241,14 @@ def discoverSourceFiles():
         return os.path.join(static_src, sub_path.replace('/', os.path.sep))
 
     result.append(getStatic("CompiledFunctionType.cpp"))
-    result.append(getStatic("CompiledGeneratorType.cpp"))
     result.append(getStatic("CompiledMethodType.cpp"))
+    result.append(getStatic("CompiledGeneratorType.cpp"))
+    if python_version >= "3.5":
+        result.append(getStatic("CompiledCoroutineType.cpp"))
     result.append(getStatic("CompiledFrameType.cpp"))
     result.append(getStatic("CompiledCodeHelpers.cpp"))
     result.append(getStatic("InspectPatcher.cpp"))
+    result.append(getStatic("MetaPathBasedLoader.cpp"))
 
     if win_target:
         result.append(getStatic("win32_ucontext_src/fibers_win32.cpp"))
@@ -1192,9 +1274,8 @@ def discoverSourceFiles():
         if filename.endswith(".cpp"):
             result.append(os.path.join(source_dir, filename))
 
-    # If more than one module is included, we need the unfreezer.
-    if module_count > 1:
-        result.append(getStatic("MetaPathBasedLoader.cpp"))
+    if not module_mode:
+        result.append(getStatic("MainProgram.cpp"))
 
     if constants_generated_filename is not None:
         result.append(constants_generated_filename)
@@ -1213,7 +1294,6 @@ if win_target:
     rc_file_dependencies = []
 
     if not module_mode:
-
         rc_content.append(
             '3 RCDATA "%s"' % constants_bin_filename.replace('\\', '/')
         )
@@ -1226,21 +1306,7 @@ if win_target:
                 "resources.manifest"
             )
 
-            if win_from_source_mode:
-                # Also consider a Python built from source.
-                python_exe = os.path.join(
-                     python_prefix,
-                     "PCBuild",
-                     "python_d.exe" if python_debug else "python.exe"
-                )
-            else:
-                # Find the "python.exe" in a normal install, this is assuming we
-                # broke out of the virtualenv already.
-                python_exe = os.path.join(
-                     python_prefix,
-                     "python.exe"
-                )
-
+            python_exe = os.environ["NUITKA_PYTHON_EXE_PATH"]
             assert os.path.exists(python_exe), python_exe
 
             if msvc_mode:
@@ -1265,15 +1331,19 @@ Error, call to 'mt.exe' (%s) to extract manifest failed (error code %d.""" % (
                         )
                     )
             else:
-                result = subprocess.call(
-                    (
-                        env["RC"],
-                        "--input", python_exe,
-                        "--output", manifest_filename,
-                        "--output-format", "rc"
-                    ),
-                    stdout = subprocess.PIPE
-                )
+                try:
+                    result = subprocess.call(
+                        (
+                            "windres.exe",
+                            "--input", python_exe,
+                            "--output", manifest_filename,
+                            "--output-format", "rc"
+                        ),
+                        stdout = subprocess.PIPE
+                    )
+                except WindowsError:
+                    sys.exit("Error, cannot find 'windres.exe' but it is required.")
+
 
                 if result != 0:
                     sys.exit("Error, call to 'windres.exe' to extract manifest failed.")
@@ -1413,16 +1483,44 @@ def signalHandler(signal, frame):
 
 signal.signal(signal.SIGINT, signalHandler)
 
+def makeCLiteral(value):
+    value = value.replace("\\", r"\\")
+    value = value.replace('"', r'\"')
+
+    return '"' + value + '"'
+
+if uninstalled_python:
+    if win_target:
+        env.Append(
+            CPPDEFINES = [
+                'DLL_EXTRA_PATH=%s' % \
+                   makeCLiteral(
+                       os.path.dirname(getWindowsPythonDLLPath())
+                   )
+            ]
+        )
+    elif sys.platform.startswith("linux"):
+        env.Append(
+            LINKFLAGS = ["-Wl,-R," + python_lib_path]
+        )
+
+        env.Append(
+            CPPDEFINES = [
+                "PYTHON_HOME_PATH='%s'" % \
+                   makeCLiteral(
+                       python_prefix
+                   )
+            ]
+        )
+
 Default(target) # @UndefinedVariable
 
 # Copy the Python DLL to the target directory, so the executable can be run.
 if uninstalled_python:
-    if os.name == "nt":
+    if win_target:
+        # TODO: This should have become unnecessary by DLL_EXTRA_PATH
         shutil.copy(
-            os.path.join(
-                python_prefix,
-                "python" + python_version.replace('.', "") + ".dll"
-            ),
+            getWindowsPythonDLLPath(),
             os.path.dirname(result_basepath) or "."
         )
     elif sys.platform == "darwin":

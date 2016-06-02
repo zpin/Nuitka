@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -23,9 +23,12 @@ to do.
 """
 
 from nuitka.Builtins import calledWithBuiltinArgumentNamesDecorator
-from nuitka.utils import Utils
+from nuitka.PythonVersions import python_version
 
-from .NodeBases import ExpressionChildrenHavingBase, StatementChildrenHavingBase
+from .NodeBases import (
+    ExpressionChildrenHavingBase,
+    StatementChildrenHavingBase
+)
 from .NodeMakingHelpers import (
     convertNoneConstantToNone,
     makeStatementOnlyNodesFromExpressions
@@ -62,7 +65,7 @@ class ExpressionBuiltinEval(ExpressionChildrenHavingBase):
 
 
 # Note: Python3 only so far.
-if Utils.python_version >= 300:
+if python_version >= 300:
     class ExpressionBuiltinExec(ExpressionBuiltinEval):
         kind = "EXPRESSION_BUILTIN_EXEC"
 
@@ -76,7 +79,7 @@ if Utils.python_version >= 300:
             )
 
         def needsLocalsDict(self):
-            return False
+            return True
 
         def computeExpression(self, constraint_collection):
             # TODO: Attempt for constant values to do it.
@@ -92,13 +95,13 @@ if Utils.python_version >= 300:
                 )
 
                 return result, "new_statements", """\
-Replaced builtin exec call to exec statement in early closure context."""
+Replaced built-in exec call to exec statement in early closure context."""
             else:
                 return statement, None, None
 
 
 # Note: Python2 only
-if Utils.python_version < 300:
+if python_version < 300:
     class ExpressionBuiltinExecfile(ExpressionBuiltinEval):
         kind = "EXPRESSION_BUILTIN_EXECFILE"
 
@@ -121,8 +124,7 @@ if Utils.python_version < 300:
             # correctly by the code for exec statements.
             provider = self.getParentVariableProvider()
 
-            if provider.isExpressionFunctionBody() and \
-               provider.isClassDictCreation():
+            if provider.isExpressionClassBody():
                 result = StatementExec(
                     source_code = self.getSourceCode(),
                     globals_arg = self.getGlobals(),
@@ -131,7 +133,7 @@ if Utils.python_version < 300:
                 )
 
                 return result, "new_statements", """\
-Changed execfile to exec on class level."""
+Changed 'execfile' with unused result to 'exec' on class level."""
             else:
                 return statement, None, None
 
@@ -285,7 +287,7 @@ class StatementLocalsDictSync(StatementChildrenHavingBase):
         )
 
     def computeStatement(self, constraint_collection):
-        if self.getParentVariableProvider().isPythonModule():
+        if self.getParentVariableProvider().isCompiledPythonModule():
             return None, "new_statements", "Removed sync back to locals without locals."
 
         constraint_collection.removeAllKnowledge()

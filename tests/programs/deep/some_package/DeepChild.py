@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Python tests originally created or extracted from other peoples work. The
 #     parts were too small to be protected.
@@ -15,10 +15,11 @@
 #     See the License for the specific language governing permissions and
 #     limitations under the License.
 #
+from __future__ import print_function
 
 print( "Importing child." )
 
 class A:
-   pass
+    pass
 
 print("Class defined here, has these vars", vars(A))

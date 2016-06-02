@@ -1,4 +1,4 @@
-//     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+//     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 //
 //     Part of "Nuitka", an optimizing Python compiler that is compatible and
 //     integrates with CPython, but also works on its own.
@@ -133,10 +133,13 @@ static PyObject *Nuitka_Frame_get_restricted( PyFrameObject *frame, void *closur
 
 static PyObject *Nuitka_Frame_getlocals( PyFrameObject *frame, void *closure )
 {
-    // Note: Very important that we correctly support this function to work:
-    PyFrame_FastToLocals( frame );
+    if ( frame->f_locals == NULL )
+    {
+        frame->f_locals = PyDict_New();
+    }
 
-    return INCREASE_REFCOUNT( frame->f_locals );
+    Py_INCREF( frame->f_locals );
+    return frame->f_locals;
 }
 
 static PyObject *Nuitka_Frame_getlineno( PyFrameObject *frame, void *closure )
@@ -315,6 +318,8 @@ static PyObject *Nuitka_Frame_clear( PyFrameObject *frame )
     {
         Py_INCREF( frame );
 
+        assert( Nuitka_Generator_Check( frame->f_gen ) );
+
         Nuitka_GeneratorObject *generator = (Nuitka_GeneratorObject *)frame->f_gen;
         frame->f_gen = NULL;
 
@@ -413,7 +418,7 @@ static void tb_dealloc( PyTracebackObject *tb )
 
 extern PyObject *const_str_plain___module__;
 
-PyFrameObject *MAKE_FRAME( PyCodeObject *code, PyObject *module )
+static PyFrameObject *MAKE_FRAME( PyCodeObject *code, PyObject *module, bool is_module )
 {
     PyTraceBack_Type.tp_dealloc = (destructor)tb_dealloc;
 
@@ -463,7 +468,11 @@ PyFrameObject *MAKE_FRAME( PyCodeObject *code, PyObject *module )
     {
         frame->f_locals = NULL;
     }
-    else if (likely( code->co_firstlineno != 0 ))
+    else if (is_module)
+    {
+        frame->f_locals = INCREASE_REFCOUNT( globals );
+    }
+    else
     {
         frame->f_locals = PyDict_New();
 
@@ -479,10 +488,6 @@ PyFrameObject *MAKE_FRAME( PyCodeObject *code, PyObject *module )
             const_str_plain___module__,
             MODULE_NAME( module )
         );
-    }
-    else
-    {
-        frame->f_locals = INCREASE_REFCOUNT( globals );
     }
 
 #if PYTHON_VERSION < 340
@@ -501,6 +506,17 @@ PyFrameObject *MAKE_FRAME( PyCodeObject *code, PyObject *module )
     Nuitka_GC_Track( result );
     return (PyFrameObject *)result;
 }
+
+PyFrameObject *MAKE_MODULE_FRAME( PyCodeObject *code, PyObject *module )
+{
+    return MAKE_FRAME( code, module, true );
+}
+
+PyFrameObject *MAKE_FUNCTION_FRAME( PyCodeObject *code, PyObject *module )
+{
+    return MAKE_FRAME( code, module, false );
+}
+
 
 extern PyObject *const_str_empty;
 extern PyObject *const_bytes_empty;

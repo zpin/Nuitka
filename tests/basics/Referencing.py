@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Python tests originally created or extracted from other peoples work. The
 #     parts were too small to be protected.
@@ -837,6 +837,8 @@ def simpleFunction101():
 
     orMaking('x', "")
 
+####################################
+
 class SomeClassWithAttributeAccess(object):
     READING = 1
 
@@ -847,6 +849,41 @@ def simpleFunction102():
     SomeClassWithAttributeAccess().use()
     SomeClassWithAttributeAccess().use()
 
+####################################
+
+def getInt():
+    return 3
+
+def simpleFunction103():
+    try:
+        raise getInt()
+    except TypeError:
+        pass
+
+####################################
+
+class ClassWithGeneratorMethod:
+    def generator_method(self):
+        yield self
+
+
+def simpleFunction104():
+    return list(ClassWithGeneratorMethod().generator_method())
+
+
+def simpleFunction105():
+    """ Delete a started generator, not properly closing it before releasing.
+    """
+    def generator():
+        yield 1
+        yield 2
+
+    g = generator()
+    next(g)
+
+    del g
+
+####################################
 
 
 # These need stderr to be wrapped.

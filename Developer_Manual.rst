@@ -1,7 +1,7 @@
 Nuitka Developer Manual
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-.. image:: images/Nuitka-Logo-Symbol.png
+.. image:: doc/images/Nuitka-Logo-Symbol.png
 
 .. contents::
 
@@ -29,9 +29,8 @@ Milestones
    absolutely compatible.
 
    Feature parity has been reached for CPython 2.6 and 2.7. We do not target any
-   older CPython release. For CPython 3.2, CPython 3.3, and CPython 3.4 it also
-   has been reached. We do not target the older and practically unused CPython
-   3.1 and 3.0 releases.
+   older CPython release. For CPython 3.2 to 3.5 it also has been reached. We do
+   not target the older and practically unused CPython 3.1 and 3.0 releases.
 
    This milestone was reached. Dropping support for Python 2.6 and 3.2 is an
    option, should this prove to be any benefit. Currently it is not, as it
@@ -300,7 +299,7 @@ The "git flow" model
 * The flow was is used for releases and occasionally subsequent hot fixes.
 
   A few feature branches were used so far. It allows for quick delivery of fixes
-  to both the stable and the development version, supported by a git plugin,
+  to both the stable and the development version, supported by a git plug-in,
   that can be installed via "apt-get install git-flow" on latest Debian Testing
   at least.
 
@@ -509,19 +508,19 @@ Nuitka Logo
 -----------
 
 The logo was submitted by "dr. Equivalent". It's source is contained in
-``misc/Logo`` where 3 variants of the logo in SVG are placed.
+``doc/Logo`` where 3 variants of the logo in SVG are placed.
 
 * Symbol only (symbol)
 
-  .. image:: images/Nuitka-Logo-Symbol.png
+  .. image:: doc/images/Nuitka-Logo-Symbol.png
 
 * Text next to symbol (horizontal)
 
-  .. image:: images/Nuitka-Logo-Horizontal.png
+  .. image:: doc/images/Nuitka-Logo-Horizontal.png
 
 * Text beneath symbol (vertical)
 
-  .. image:: images/Nuitka-Logo-Vertical.png
+  .. image:: doc/images/Nuitka-Logo-Vertical.png
 
 From these logos, PNG images, and "favicons", and are derived.
 
@@ -530,13 +529,13 @@ each time, the commands are also replicated here:
 
 .. code-block:: sh
 
-   convert -background none misc/Logo/Nuitka-Logo-Symbol.svg images/Nuitka-Logo-Symbol.png
-   convert -background none misc/Logo/Nuitka-Logo-Vertical.svg images/Nuitka-Logo-Vertical.png
-   convert -background none misc/Logo/Nuitka-Logo-Horizontal.svg images/Nuitka-Logo-Horizontal.png
+   convert -background none doc/Logo/Nuitka-Logo-Symbol.svg doc/images/Nuitka-Logo-Symbol.png
+   convert -background none doc/Logo/Nuitka-Logo-Vertical.svg doc/images/Nuitka-Logo-Vertical.png
+   convert -background none doc/Logo/Nuitka-Logo-Horizontal.svg doc/images/Nuitka-Logo-Horizontal.png
 
-   optipng -o2 images/Nuitka-Logo-Symbol.png
-   optipng -o2 images/Nuitka-Logo-Vertical.png
-   optipng -o2 images/Nuitka-Logo-Horizontal.png
+   optipng -o2 doc/images/Nuitka-Logo-Symbol.png
+   optipng -o2 doc/images/Nuitka-Logo-Vertical.png
+   optipng -o2 doc/images/Nuitka-Logo-Horizontal.png
 
 
 Choice of the Target Language
@@ -1252,6 +1251,37 @@ different.
 This removes the need for optimization and code generation to support decorators
 at all. And it should make the two variants optimize equally well.
 
+
+Functions nested arguments
+++++++++++++++++++++++++++
+
+Nested arguments are a Python2 only feature supported by Nuitka. Consider this
+example:
+
+.. code-block:: python
+
+   def function(a,(b,c)):
+      return a, b, c
+
+We solve this, by kind of wrapping the function with another function that does
+the unpacking and gives the errors that come from this:
+
+.. code-block:: python
+
+   def function(a,".1"):
+      def _tmp(a, b, c):
+         return a, b, c
+
+      a, b = ".1"
+      return _tmp(a, b, c)
+
+The ``".1"`` is the variable name used by CPython internally, and actually works
+if you use keyword arguments via star dictionary. So this is very compatible and
+actually the right kind of re-formulation, but it removes the need from the code
+that does parameter parsing to deal with these.
+
+Obviously, there is no frame for ``_tmp``, just one for ``function`` and we do
+not use local variables, but temporary functions.
 
 In-place Assignments
 ++++++++++++++++++++
@@ -2093,17 +2123,26 @@ efficient binding as if it were written manually with Python C-API or better.
 Goals/Allowances to the task
 ----------------------------
 
-1. Goal: Must not use any pre-existing C/C++ language file headers, only
-   generate declarations in generated C code ourselves. We would rather write
-   or use tools that turn an existing a C header to ``ctypes`` declarations
-   if it needs to be, but not mix and use declarations from existing header
-   code.
+1. Goal: Must not ourselves use any pre-existing C/C++ language file headers,
+   only generate declarations in generated C code ourselves. We would rather
+   write or use tools that turn an existing a C header to some ``ctypes``
+   declarations if it needs to be, but not mix and use declarations from
+   existing header code.
+
+   ..note::
+
+      The "cffi" interface won't have the issue, but it's not something we
+      need to write or test the code for.
+
 2. Allowance: May use ``ctypes`` module at compile time to ask things about
    ``ctypes`` and its types.
-3. Goal: Should make use of ``ctypes``, to e.g. not hard code what
+
+3. Goal: Should make use of ``ctypes``, to e.g. not hard code in Nuitka what
    ``ctypes.c_int()`` gives on the current platform, unless there is a specific
    benefit.
+
 4. Allowance: Not all ``ctypes`` usages must be supported immediately.
+
 5. Goal: Try and be as general as possible. For the compiler, ``ctypes`` support
    should be hidden behind a generic interface of some sort. Supporting ``math``
    module should be the same thing.
@@ -2136,38 +2175,14 @@ or what ``a`` was before. If the type is not mutable, we can assume the aliasing
 to be broken up, and if it is, we can assume both to be the same value still.
 
 When that value is a compile time constant, we will want to push it forward,
-because storing such a constant under a variable name has a cost and loading it
-back from the variable as well. So, you want to be able collapse such code:
-
-.. code-block:: python
-
-   a = 3
-   b = 7
-   c = a / b
-
-to:
-
-.. code-block:: python
-
-   c = 3 / 7
-
-and that obviously to:
-
-.. code-block:: python
-
-   c = 0
-
-This may be called "(Constant) Value Propagation". But we are aiming for even
-more. We want to forward propagate abstract properties of the values.
-
-.. note::
-
-   Built-in exceptions, and built-in names are also compile time constants.
+and we do that with "(Constant) Value Propagation", which is implemented
+already. We avoid too large constants, and we properly trace value assignments,
+but not yet aliases.
 
 In order to fully benefit from type knowledge, the new type system must be able
 to be fully friends with existing built-in types.  The behavior of a type
 ``long``, ``str``, etc. ought to be implemented as far as possible with the
-built-in ``long``, ``str`` as well.
+built-in ``long``, ``str`` at compiled time as well.
 
 .. note::
 
@@ -2200,12 +2215,12 @@ used at compile time and cope with reduced knowledge, already here:
 
 Instead, we would probably say that for this expression:
 
-   - The result is a ``str`` or ``PyStringObject``.
+   - The result is a ``str`` aka ``PyStringObject *``.
    - We know its length exactly, it's ``10000000000000``.
    - Can predict every of its elements when sub-scripted, sliced, etc., if need
      be, with a function we may create.
 
-Similar is true for this horrible thing:
+Similar is true for this horrible (in Python2) thing:
 
 .. code-block:: python
 
@@ -2213,17 +2228,17 @@ Similar is true for this horrible thing:
 
 So it's a rather general problem, this time we know:
 
-   - The result is a ``list`` or ``PyListObject``
+   - The result is a ``list`` or ``PyListObject *``
    - We know its length exactly, ``10000000000000``
    - Can predict every of its elements when index, sliced, etc., if need be,
      with a function.
 
 Again, we wouldn't want to create the list. Therefore Nuitka avoids executing
 these calculation, when they result in constants larger than a threshold of
-e.g. 256. This concept has to be also applied to integers and more CPU and
-memory traps.
+e.g. 256 elements. This concept has to be also applied to large integers and
+more CPU and memory traps.
 
-Now lets look at a more common use case:
+Now lets look at a more complete use case:
 
 .. code-block:: python
 
@@ -2238,7 +2253,7 @@ are not used at all, but only the length of the expression matters.
 And even if ``x`` were used, only the ability to predict the value from a
 function would be interesting, so we would use that computation function instead
 of having an iteration source. Being able to predict from a function could mean
-to have Python code to do it, as well as C++ code to do it. Then code for the
+to have Python code to do it, as well as C code to do it. Then code for the
 loop can be generated without any CPython library usage at all.
 
 .. note::
@@ -2290,8 +2305,8 @@ module ``__import__`` expression is examined, it should say:
 
    - ``ctypes`` is a module
    - ``ctypes`` is from standard library (if it is, may not be true)
-   - ``ctypes`` has a ``ModuleFriend`` that knows things about it attributes,
-     that should be asked.
+   - ``ctypes`` then has code behind it, called ``ModuleFriend`` that knows
+     things about it attributes, that should be asked.
 
 The later is the generic interface, and the optimization should connect the two,
 of course via package and module full names. It will need a
@@ -2301,7 +2316,7 @@ be more like a plug-in, loaded only if necessary, i.e. the user code actually
 uses ``ctypes``.
 
 Coming back to the original expression, it also contains an assignment
-expression, because it re-formuated to be more like this:
+expression, because it re-formulated to be more like this:
 
 .. code-block:: python
 
@@ -2313,7 +2328,7 @@ variable, and therefore have only one version of that variable.
 
 For module variables, when the execution leaves the module to unknown code, or
 unclear code, it might change the variable. Therefore, likely we will often only
-assume that it could still be ctypes, but also something else.
+assume that it could still be ``ctypes``, but also something else.
 
 Depending on how well we control module variable assignment, we can decide this
 more of less quickly. With "compiled modules" types, the expectation is that
@@ -2327,7 +2342,7 @@ Then when we come to uses of it:
    ctypes.c_int()
 
 At this point, using SSA, we are more of less sure, that ``ctypes`` is at that
-point the module, and that we know what it's ``c_int`` attribute is, at comile
+point the module, and that we know what it's ``c_int`` attribute is, at compile
 time, and what it's call result is. We will use the module friend to help with
 that. It will attach knowledge about the result of that expression during the
 SSA collection process.
@@ -2349,9 +2364,9 @@ propagate forward, how to handle this:
 
       return a
 
-We would annotate that ``a`` is first a "unknown but defined parameter object",
-then later on something that definitely has an ``append`` attribute, when
-returned. Otherwise an exception occurs.
+We annotate that ``a`` is first a "unknown but defined parameter object", then
+later on something that definitely has an ``append`` attribute, when returned,
+as otherwise an exception occurs.
 
 The type of ``a`` changes to that after ``a.append`` look-up succeeds. It might
 be many kinds of an object, but e.g. it could have a higher probability of being

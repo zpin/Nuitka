@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -23,30 +23,50 @@ source code comments with developer manual sections.
 """
 
 from nuitka.nodes.AssignNodes import (
+    ExpressionTargetTempVariableRef,
     ExpressionTargetVariableRef,
     StatementAssignmentVariable,
     StatementReleaseVariable
 )
+from nuitka.nodes.BuiltinIteratorNodes import (
+    ExpressionBuiltinIter1,
+    ExpressionSpecialUnpack,
+    StatementSpecialUnpackCheck
+)
 from nuitka.nodes.BuiltinRefNodes import ExpressionBuiltinRef
 from nuitka.nodes.CallNodes import ExpressionCallNoKeywords
+from nuitka.nodes.CodeObjectSpecs import CodeObjectSpec
 from nuitka.nodes.ConstantRefNodes import ExpressionConstantRef
 from nuitka.nodes.ContainerMakingNodes import ExpressionMakeTuple
+from nuitka.nodes.CoroutineNodes import (
+    ExpressionCoroutineObjectBody,
+    ExpressionMakeCoroutineObject
+)
 from nuitka.nodes.FunctionNodes import (
     ExpressionFunctionBody,
+    ExpressionFunctionCall,
     ExpressionFunctionCreation,
-    ExpressionFunctionRef,
-    ExpressionCoroutineCreation,
-    ExpressionCoroutineBody
+    ExpressionFunctionRef
+)
+from nuitka.nodes.GeneratorNodes import (
+    ExpressionGeneratorObjectBody,
+    ExpressionMakeGeneratorObject,
+    StatementGeneratorReturn
 )
 from nuitka.nodes.ParameterSpecs import ParameterSpec
 from nuitka.nodes.ReturnNodes import StatementReturn
+from nuitka.nodes.VariableRefNodes import (
+    ExpressionTempVariableRef,
+    ExpressionVariableRef
+)
+from nuitka.PythonVersions import python_version
 from nuitka.tree import SyntaxErrors
-from nuitka.utils import Utils
 
 from .Helpers import (
     buildNode,
     buildNodeList,
     buildStatementsNode,
+    detectFunctionBodyKind,
     extractDocFromBody,
     getKind,
     makeDictCreationOrConstant,
@@ -55,30 +75,27 @@ from .Helpers import (
 )
 from .ReformulationTryFinallyStatements import makeTryFinallyStatement
 
-def _insertFinalReturnStatement(function_statements_body, source_ref):
+
+def _insertFinalReturnStatement(function_statements_body, return_class,
+                                source_ref):
+    return_statement = return_class(
+        expression = ExpressionConstantRef(
+            constant      = None,
+            user_provided = True,
+            source_ref    = source_ref
+        ),
+        source_ref = source_ref
+    )
+
     if function_statements_body is None:
         function_statements_body = makeStatementsSequenceFromStatement(
-            statement = StatementReturn(
-                expression = ExpressionConstantRef(
-                    constant      = None,
-                    user_provided = True,
-                    source_ref    = source_ref
-                ),
-                source_ref = source_ref
-            )
+            statement = return_statement,
         )
     elif not function_statements_body.isStatementAborting():
         function_statements_body.setStatements(
             function_statements_body.getStatements() +
             (
-                StatementReturn(
-                    expression = ExpressionConstantRef(
-                        constant      = None,
-                        user_provided = True,
-                        source_ref    = source_ref
-                    ),
-                    source_ref = source_ref
-                ),
+                return_statement,
             )
         )
 
@@ -86,18 +103,58 @@ def _insertFinalReturnStatement(function_statements_body, source_ref):
 
 
 def buildFunctionNode(provider, node, source_ref):
+    # Functions have way too many details, pylint: disable=R0914
+
     assert getKind(node) == "FunctionDef"
 
-    function_statements, function_doc = extractDocFromBody(node)
+    function_statement_nodes, function_doc = extractDocFromBody(node)
 
-    function_body = ExpressionFunctionBody(
-        provider   = provider,
-        name       = node.name,
-        doc        = function_doc,
-        parameters = buildParameterSpec(provider, node.name, node, source_ref),
-        is_class   = False,
-        source_ref = source_ref
+    function_kind, flags, _written_variables, _non_local_declarations, _global_declarations = \
+      detectFunctionBodyKind(
+        nodes = function_statement_nodes
     )
+
+    outer_body, function_body, code_object = buildFunctionWithParsing(
+        provider      = provider,
+        function_kind = function_kind,
+        name          = node.name,
+        function_doc  = function_doc,
+        flags         = flags,
+        node          = node,
+        source_ref    = source_ref
+    )
+
+    if function_kind == "Function":
+        code_body = function_body
+    elif function_kind == "Generator":
+        code_body = ExpressionGeneratorObjectBody(
+            provider   = function_body,
+            name       = node.name,
+            flags      = flags,
+            source_ref = source_ref
+        )
+
+        for variable in function_body.getVariables():
+            code_body.getVariableForReference(variable.getName())
+    else:
+        assert False, function_kind
+
+    if function_kind == "Generator":
+        function_body.setBody(
+            makeStatementsSequenceFromStatement(
+                statement = StatementReturn(
+                    expression = ExpressionMakeGeneratorObject(
+                        generator_ref = ExpressionFunctionRef(
+                            function_body = code_body,
+                            source_ref    = source_ref
+                        ),
+                        code_object   = code_object,
+                        source_ref    = source_ref
+                    ),
+                    source_ref = source_ref
+                )
+            )
+        )
 
     decorators = buildNodeList(
         provider   = provider,
@@ -119,18 +176,17 @@ def buildFunctionNode(provider, node, source_ref):
     )
 
     function_statements_body = buildStatementsNode(
-        provider   = function_body,
-        nodes      = function_statements,
-        frame      = True,
-        source_ref = source_ref
+        provider    = code_body,
+        nodes       = function_statement_nodes,
+        code_object = code_object,
+        source_ref  = source_ref
     )
 
-    if function_body.isGenerator():
-        # TODO: raise generator exit?
-        pass
-    else:
+    if function_kind == "Function":
+        # TODO: Generators might have to raise GeneratorExit instead.
         function_statements_body = _insertFinalReturnStatement(
             function_statements_body = function_statements_body,
+            return_class             = StatementReturn,
             source_ref               = source_ref
         )
 
@@ -139,7 +195,7 @@ def buildFunctionNode(provider, node, source_ref):
             statement = function_statements_body
         )
 
-    function_body.setBody(
+    code_body.setBody(
         function_statements_body
     )
 
@@ -147,9 +203,10 @@ def buildFunctionNode(provider, node, source_ref):
 
     function_creation = ExpressionFunctionCreation(
         function_ref = ExpressionFunctionRef(
-            function_body = function_body,
+            function_body = outer_body,
             source_ref    = source_ref
         ),
+        code_object  = code_object,
         defaults     = defaults,
         kw_defaults  = kw_defaults,
         annotations  = annotations,
@@ -161,16 +218,19 @@ def buildFunctionNode(provider, node, source_ref):
     # CPython made these optional, but secretly applies them when it does
     # "class __new__".  We add them earlier, so our optimization will see it.
     if node.name == "__new__" and \
-       not decorators and \
-       provider.isExpressionFunctionBody() and \
-       provider.isClassDictCreation():
+       provider.isExpressionClassBody():
 
-        decorators = (
-            ExpressionBuiltinRef(
-                builtin_name = "staticmethod",
-                source_ref   = source_ref
-            ),
-        )
+        for decorator in decorators:
+            if decorator.isExpressionVariableRef() and \
+               decorator.getVariableName() == "staticmethod":
+                break
+        else:
+            decorators.append(
+                ExpressionBuiltinRef(
+                    builtin_name = "staticmethod",
+                    source_ref   = source_ref
+                )
+            )
 
     decorated_function = function_creation
     for decorator in decorators:
@@ -192,7 +252,7 @@ def buildFunctionNode(provider, node, source_ref):
         source_ref   = source_ref
     )
 
-    if Utils.python_version >= 340:
+    if python_version >= 340:
         function_body.qualname_setup = result.getTargetVariableRef()
 
     return result
@@ -203,20 +263,22 @@ def buildAsyncFunctionNode(provider, node, source_ref):
     # many details each, pylint: disable=R0914
     assert getKind(node) == "AsyncFunctionDef"
 
-    function_statements, function_doc = extractDocFromBody(node)
+    function_statement_nodes, function_doc = extractDocFromBody(node)
 
-    creator_function_body = ExpressionFunctionBody(
-        provider   = provider,
-        name       = node.name,
-        doc        = function_doc,
-        parameters = buildParameterSpec(provider, node.name, node, source_ref),
-        is_class   = False,
-        source_ref = source_ref
+    creator_function_body, _, code_object = buildFunctionWithParsing(
+        provider      = provider,
+        function_kind = "Coroutine",
+        name          = node.name,
+        flags         = set(),
+        function_doc  = function_doc,
+        node          = node,
+        source_ref    = source_ref
     )
 
-    function_body = ExpressionCoroutineBody(
+    function_body = ExpressionCoroutineObjectBody(
         provider   = creator_function_body,
         name       = node.name,
+        flags      = set(),
         source_ref = source_ref
     )
 
@@ -233,17 +295,15 @@ def buildAsyncFunctionNode(provider, node, source_ref):
     )
 
     function_statements_body = buildStatementsNode(
-        provider   = function_body,
-        nodes      = function_statements,
-        frame      = True,
-        source_ref = source_ref
+        provider    = function_body,
+        nodes       = function_statement_nodes,
+        code_object = code_object,
+        source_ref  = source_ref
     )
-
-    # Not allowed.
-    assert not function_body.isGenerator()
 
     function_statements_body = _insertFinalReturnStatement(
         function_statements_body = function_statements_body,
+        return_class             = StatementGeneratorReturn,
         source_ref               = source_ref
     )
 
@@ -268,9 +328,13 @@ def buildAsyncFunctionNode(provider, node, source_ref):
     creator_function_body.setBody(
         makeStatementsSequenceFromStatement(
             statement = StatementReturn(
-                expression = ExpressionCoroutineCreation(
-                    coroutine_body = function_body,
-                    source_ref     = source_ref
+                expression = ExpressionMakeCoroutineObject(
+                    coroutine_ref = ExpressionFunctionRef(
+                        function_body = function_body,
+                        source_ref    = source_ref
+                    ),
+                    code_object   = code_object,
+                    source_ref    = source_ref
                 ),
                 source_ref = source_ref
             )
@@ -282,6 +346,7 @@ def buildAsyncFunctionNode(provider, node, source_ref):
             function_body = creator_function_body,
             source_ref    = source_ref
         ),
+        code_object  = code_object,
         defaults     = defaults,
         kw_defaults  = kw_defaults,
         annotations  = annotations,
@@ -318,7 +383,7 @@ def buildParameterKwDefaults(provider, node, function_body, source_ref):
     # Build keyword only arguments default values. We are hiding here, that it
     # is a Python3 only feature.
 
-    if Utils.python_version >= 300:
+    if python_version >= 300:
         kw_only_names = function_body.getParameters().getKwOnlyParameterNames()
 
         if kw_only_names:
@@ -341,7 +406,6 @@ def buildParameterKwDefaults(provider, node, function_body, source_ref):
             kw_defaults = makeDictCreationOrConstant(
                 keys       = keys,
                 values     = values,
-                lazy_order = False,
                 source_ref = source_ref
             )
         else:
@@ -356,13 +420,13 @@ def buildParameterAnnotations(provider, node, source_ref):
     # Too many branches, because there is too many cases, pylint: disable=R0912
 
     # Build annotations. We are hiding here, that it is a Python3 only feature.
-    if Utils.python_version < 300:
+    if python_version < 300:
         return None
 
 
     # Starting with Python 3.4, the names of parameters are mangled in
     # annotations as well.
-    if Utils.python_version < 340:
+    if python_version < 340:
         mangle = lambda variable_name: variable_name
     else:
         mangle = lambda variable_name: mangleName(variable_name, provider)
@@ -401,7 +465,7 @@ def buildParameterAnnotations(provider, node, source_ref):
     for arg in node.args.kwonlyargs:
         extractArg(arg)
 
-    if Utils.python_version < 340:
+    if python_version < 340:
         if node.args.varargannotation is not None:
             addAnnotation(
                 key   = node.args.vararg,
@@ -436,14 +500,17 @@ def buildParameterAnnotations(provider, node, source_ref):
         return makeDictCreationOrConstant(
             keys       = keys,
             values     = values,
-            lazy_order = False,
             source_ref = source_ref
         )
     else:
         return None
 
 
-def buildParameterSpec(provider, name, node, source_ref):
+def buildFunctionWithParsing(provider, function_kind, name, function_doc, flags,
+                             node, source_ref):
+    # This contains a complex re-formulation for nested parameter functions.
+    # pylint: disable=R0914
+
     kind = getKind(node)
 
     assert kind in ("FunctionDef", "Lambda", "AsyncFunctionDef"), "unsupported for kind " + kind
@@ -458,34 +525,45 @@ def buildParameterSpec(provider, name, node, source_ref):
         elif getKind(arg) == "arg":
             return mangleName(arg.arg, provider)
         elif getKind(arg) == "Tuple":
-            return tuple(
-                extractArg(arg)
-                for arg in
-                arg.elts
-            )
+            # These are to be re-formulated on the outside.
+            assert False
         else:
             assert False, getKind(arg)
 
-    result = ParameterSpec(
+    special_args = {}
+
+    def extractNormalArgs(args):
+        normal_args = []
+
+        for arg in args:
+            if type(arg) is not str and getKind(arg) == "Tuple":
+                special_arg_name = ".%d" % (len(special_args) + 1)
+
+                special_args[special_arg_name] = arg.elts
+                normal_args.append(special_arg_name)
+            else:
+                normal_args.append(extractArg(arg))
+
+        return normal_args
+
+    normal_args = extractNormalArgs(node.args.args)
+
+    parameters = ParameterSpec(
         name          = name,
-        normal_args   = [
-            extractArg(arg)
-            for arg in
-            node.args.args
-        ],
+        normal_args   = normal_args,
         kw_only_args  = [
             extractArg(arg)
             for arg in
             node.args.kwonlyargs
             ]
-              if Utils.python_version >= 300 else
+              if python_version >= 300 else
             [],
         list_star_arg = extractArg(node.args.vararg),
         dict_star_arg = extractArg(node.args.kwarg),
         default_count = len(node.args.defaults)
     )
 
-    message = result.checkValid()
+    message = parameters.checkValid()
 
     if message is not None:
         SyntaxErrors.raiseSyntaxError(
@@ -493,11 +571,208 @@ def buildParameterSpec(provider, name, node, source_ref):
             source_ref
         )
 
-    return result
+    code_object = CodeObjectSpec(
+        code_name     = name,
+        code_kind     = function_kind,
+        arg_names     = parameters.getParameterNames(),
+        kw_only_count = parameters.getKwOnlyParameterCount(),
+        has_starlist  = parameters.getStarListArgumentName() is not None,
+        has_stardict  = parameters.getStarDictArgumentName() is not None
+    )
+
+    outer_body = ExpressionFunctionBody(
+        provider   = provider,
+        name       = name,
+        flags      = flags,
+        doc        = function_doc,
+        parameters = parameters,
+        source_ref = source_ref
+    )
+
+    if special_args:
+        inner_name = name.strip("<>") + "$inner"
+        inner_arg_names = []
+        iter_vars = []
+
+        values = []
+
+        statements = []
+
+        def unpackFrom(source, arg_names):
+            accesses = []
+
+            sub_special_index = 0
+
+            iter_var = outer_body.allocateTempVariable(None, "arg_iter_%d" % len(iter_vars))
+            iter_vars.append(iter_var)
+
+            statements.append(
+                StatementAssignmentVariable(
+                    variable_ref = ExpressionTargetTempVariableRef(
+                        variable   = iter_var,
+                        source_ref = source_ref
+                    ),
+                    source       = ExpressionBuiltinIter1(
+                        value      = source,
+                        source_ref = source_ref
+                    ),
+                    source_ref   = source_ref
+                )
+            )
+
+            for element_index, arg_name in enumerate(arg_names):
+                if getKind(arg_name) == "Name":
+                    inner_arg_names.append(arg_name.id)
+
+                    arg_var = outer_body.allocateTempVariable(None, "tmp_" + arg_name.id)
+
+                    statements.append(
+                        StatementAssignmentVariable(
+                            variable_ref = ExpressionTargetTempVariableRef(
+                                variable   = arg_var,
+                                source_ref = source_ref
+                            ),
+                            source       = ExpressionSpecialUnpack(
+                                value      = ExpressionTempVariableRef(
+                                    variable   = iter_var,
+                                    source_ref = source_ref
+                                ),
+                                count      = element_index + 1,
+                                expected   = len(arg_names),
+                                source_ref = source_ref
+                            ),
+                            source_ref   = source_ref
+                        )
+                    )
+
+                    accesses.append(
+                        ExpressionTempVariableRef(
+                            variable   = arg_var,
+                            source_ref = source_ref
+                        )
+                    )
+                elif getKind(arg_name) == "Tuple":
+                    accesses.extend(
+                        unpackFrom(
+                            source    = ExpressionSpecialUnpack(
+                                value      = ExpressionTempVariableRef(
+                                    variable   = iter_var,
+                                    source_ref = source_ref
+                                ),
+                                count      = element_index + 1,
+                                expected   = len(arg_names),
+                                source_ref = source_ref
+                            ),
+                            arg_names = arg_name.elts
+                        )
+                    )
+
+                    sub_special_index += 1
+                else:
+                    assert False, arg_name
+
+            statements.append(
+                StatementSpecialUnpackCheck(
+                    iterator   = ExpressionTempVariableRef(
+                        variable   = iter_var,
+                        source_ref = source_ref
+                    ),
+                    count      = len(arg_names),
+                    source_ref = source_ref
+                )
+            )
+
+            return accesses
+
+        for arg_name in parameters.getParameterNames():
+            if arg_name.startswith('.'):
+                source = ExpressionVariableRef(
+                    variable_name = arg_name,
+                    source_ref    = source_ref
+                )
+
+                values.extend(
+                    unpackFrom(source, special_args[arg_name])
+                )
+            else:
+                values.append(
+                    ExpressionVariableRef(
+                        variable_name = arg_name,
+                        source_ref    = source_ref
+                    )
+                )
+
+                inner_arg_names.append(arg_name)
+
+        inner_parameters = ParameterSpec(
+            name          = inner_name,
+            normal_args   = inner_arg_names,
+            kw_only_args  = (),
+            list_star_arg = None,
+            dict_star_arg = None,
+            default_count = None
+        )
+
+        function_body = ExpressionFunctionBody(
+            provider   = outer_body,
+            name       = inner_name,
+            flags      = flags,
+            doc        = function_doc,
+            parameters = inner_parameters,
+            source_ref = source_ref
+        )
+
+        statements.append(
+            StatementReturn(
+                ExpressionFunctionCall(
+                    function   = ExpressionFunctionCreation(
+                        function_ref = ExpressionFunctionRef(
+                            function_body = function_body,
+                            source_ref    = source_ref
+                        ),
+                        code_object  = code_object,
+                        defaults     = (),
+                        kw_defaults  = None,
+                        annotations  = None,
+                        source_ref   = source_ref
+                    ),
+                    values     = values,
+                    source_ref = source_ref
+                ),
+                source_ref = source_ref
+            )
+        )
+
+        outer_body.setBody(
+            makeStatementsSequenceFromStatement(
+                statement = makeTryFinallyStatement(
+                    provider,
+                    tried      = statements,
+                    final      = [
+                        StatementReleaseVariable(
+                            variable   = variable,
+                            source_ref = source_ref
+                        )
+                        for variable in
+                        outer_body.getTempVariables()
+                    ]   ,
+                    source_ref = source_ref,
+                    public_exc = False
+                )
+            )
+        )
+    else:
+        function_body = outer_body
+
+    return outer_body, function_body, code_object
 
 
 def addFunctionVariableReleases(function):
-    assert function.isExpressionFunctionBody()
+    assert function.isExpressionFunctionBody() or \
+           function.isExpressionClassBody() or \
+           function.isExpressionGeneratorObjectBody() or \
+           function.isExpressionCoroutineObjectBody()
+
 
     releases = []
 
@@ -507,11 +782,6 @@ def addFunctionVariableReleases(function):
     for variable in function.getLocalVariables():
         # Shared variables are freed by function object attachment.
         if variable.getOwner() is not function:
-            continue
-
-        # Generators have it attached at creation and release it automatically
-        # when deleted.
-        if function.isGenerator() and variable.isParameterVariable():
             continue
 
         releases.append(

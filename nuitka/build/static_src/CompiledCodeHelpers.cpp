@@ -1,4 +1,4 @@
-//     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+//     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 //
 //     Part of "Nuitka", an optimizing Python compiler that is compatible and
 //     integrates with CPython, but also works on its own.
@@ -143,27 +143,36 @@ PyObject *BUILTIN_OPEN( PyObject *file_name, PyObject *mode, PyObject *buffering
     }
     else if ( mode == NULL )
     {
+        PyObject *args[] = {
+            file_name
+        };
         return CALL_FUNCTION_WITH_ARGS1(
             _python_builtin_open.asObject0(),
-            file_name
+            args
         );
 
     }
     else if ( buffering == NULL )
     {
-        return CALL_FUNCTION_WITH_ARGS2(
-            _python_builtin_open.asObject0(),
+        PyObject *args[] = {
             file_name,
             mode
+        };
+        return CALL_FUNCTION_WITH_ARGS2(
+            _python_builtin_open.asObject0(),
+            args
         );
     }
     else
     {
-        return CALL_FUNCTION_WITH_ARGS3(
-            _python_builtin_open.asObject0(),
+        PyObject *args[] = {
             file_name,
             mode,
             buffering
+        };
+        return CALL_FUNCTION_WITH_ARGS3(
+            _python_builtin_open.asObject0(),
+            args
         );
     }
 }
@@ -600,9 +609,11 @@ PyObject *BUILTIN_RANGE( PyObject *boundary )
     {
         CLEAR_ERROR_OCCURRED();
 
+        PyObject *args[] = { boundary_temp };
+
         PyObject *result = CALL_FUNCTION_WITH_ARGS1(
             _python_builtin_range.asObject0(),
-            boundary_temp
+            args
         );
 
         Py_DECREF( boundary_temp );
@@ -613,9 +624,11 @@ PyObject *BUILTIN_RANGE( PyObject *boundary )
 
     return _BUILTIN_RANGE_INT( start );
 #else
+    PyObject *args[] = { boundary };
+
     return CALL_FUNCTION_WITH_ARGS1(
        _python_builtin_range.asObject0(),
-       boundary
+       args
     );
 #endif
 }
@@ -803,26 +816,35 @@ PyObject *BUILTIN_XRANGE( PyObject *low, PyObject *high, PyObject *step )
 {
     if ( step != NULL )
     {
-        return CALL_FUNCTION_WITH_ARGS3(
-            _python_builtin_xrange.asObject0(),
+        PyObject *args[] = {
             low,
             high,
             step
+        };
+        return CALL_FUNCTION_WITH_ARGS3(
+            _python_builtin_xrange.asObject0(),
+            args
         );
     }
     else if ( high != NULL )
     {
-        return CALL_FUNCTION_WITH_ARGS2(
-            _python_builtin_xrange.asObject0(),
+        PyObject *args[] = {
             low,
             high
+        };
+        return CALL_FUNCTION_WITH_ARGS2(
+            _python_builtin_xrange.asObject0(),
+            args
         );
     }
     else
     {
+        PyObject *args[] = {
+            low
+        };
         return CALL_FUNCTION_WITH_ARGS1(
             _python_builtin_xrange.asObject0(),
-            low
+            args
         );
     }
 }
@@ -1080,9 +1102,11 @@ bool PRINT_ITEM_TO( PyObject *file, PyObject *object )
 #else
     if (likely( file == NULL ))
     {
+        PyObject *args[] = { object };
+
         PyObject *result = CALL_FUNCTION_WITH_ARGS1(
             _python_builtin_print.asObject0(),
-            object
+            args
         );
 
         Py_XDECREF( result );
@@ -1639,77 +1663,75 @@ extern "C" wchar_t* _Py_DecodeUTF8_surrogateescape(const char *s, Py_ssize_t siz
 #include <locale.h>
 
 #if PYTHON_VERSION >= 300
-static wchar_t **argv_copy = NULL;
+argv_type_t convertCommandLineParameters( int argc, char **argv )
+{
+#if _WIN32
+    int new_argc;
+
+    argv_type_t result = CommandLineToArgvW( GetCommandLineW(), &new_argc );
+    assert( new_argc == argc );
+    return result;
+#else
+    // Originally taken from CPython3: There seems to be no sane way to use
+    static wchar_t **argv_copy;
+    argv_copy = (wchar_t **)PyMem_Malloc(sizeof(wchar_t*) * argc);
+
+    // Temporarily disable locale for conversions to not use it.
+    char *oldloc = strdup( setlocale( LC_ALL, NULL ) );
+    setlocale( LC_ALL, "" );
+
+    for ( int i = 0; i < argc; i++ )
+    {
+#ifdef __APPLE__
+        argv_copy[i] = _Py_DecodeUTF8_surrogateescape( argv[ i ], strlen( argv[ i ] ) );
+#elif PYTHON_VERSION < 350
+        argv_copy[i] = _Py_char2wchar( argv[ i ], NULL );
+#else
+        argv_copy[i] = Py_DecodeLocale( argv[ i ], NULL );
 #endif
 
-bool setCommandLineParameters( int *argc, char *argv[], bool initial )
+        assert ( argv_copy[ i ] );
+    }
+
+    setlocale( LC_ALL, oldloc );
+    free( oldloc );
+
+    return argv_copy;
+#endif
+}
+#endif
+
+bool setCommandLineParameters( int argc, argv_type_t argv, bool initial )
 {
     bool is_multiprocessing_fork = false;
 
-    // We need to skip what multiprocessing has told Python otherwise.
-    for ( int i = 1; i < *argc; i++ )
+    if ( initial )
     {
-        if ((strcmp(argv[i], "--multiprocessing-fork")) == 0 && (i+1 < *argc))
+        /* We might need to skip what multiprocessing has told us. */
+        for ( int i = 1; i < argc; i++ )
         {
-            is_multiprocessing_fork = true;
-            break;
+#if PYTHON_VERSION < 300
+            if ((strcmp(argv[i], "--multiprocessing-fork")) == 0 && (i+1 < argc))
+#else
+            wchar_t constant_buffer[100];
+            mbstowcs( constant_buffer, "--multiprocessing-fork", 100 );
+            if ((wcscmp(argv[i], constant_buffer )) == 0 && (i+1 < argc))
+#endif
+            {
+                is_multiprocessing_fork = true;
+                break;
+            }
         }
     }
 
-#if PYTHON_VERSION < 300
     if ( initial )
     {
         Py_SetProgramName( argv[0] );
     }
     else
     {
-        PySys_SetArgv( *argc, argv );
+        PySys_SetArgv( argc, argv );
     }
-#else
-    if ( initial )
-    {
-        // Originally taken from CPython3: There seems to be no sane way to use
-        argv_copy = (wchar_t **)PyMem_Malloc(sizeof(wchar_t*) * (*argc));
-
-#ifdef __FreeBSD__
-        // 754 requires that FP exceptions run in "no stop" mode by default, and
-        // until C vendors implement C99's ways to control FP exceptions, Python
-        // requires non-stop mode.  Alas, some platforms enable FP exceptions by
-        // default.  Here we disable them.
-
-        fp_except_t m;
-
-        m = fpgetmask();
-        fpsetmask( m & ~FP_X_OFL );
-#endif
-        char *oldloc = strdup( setlocale( LC_ALL, NULL ) );
-        setlocale( LC_ALL, "" );
-
-        for ( int i = 0; i < *argc; i++ )
-        {
-#ifdef __APPLE__
-            argv_copy[i] = _Py_DecodeUTF8_surrogateescape( argv[ i ], strlen( argv[ i ] ) );
-#elif PYTHON_VERSION < 350
-            argv_copy[i] = _Py_char2wchar( argv[ i ], NULL );
-#else
-            argv_copy[i] = Py_DecodeLocale( argv[ i ], NULL );
-#endif
-            assert ( argv_copy[ i ] );
-        }
-
-        setlocale( LC_ALL, oldloc );
-        free( oldloc );
-    }
-
-    if ( initial )
-    {
-        Py_SetProgramName( argv_copy[0] );
-    }
-    else
-    {
-        PySys_SetArgv( *argc, argv_copy );
-    }
-#endif
 
     return is_multiprocessing_fork;
 }
@@ -1838,6 +1860,13 @@ int Nuitka_IsInstance( PyObject *inst, PyObject *cls )
         return true;
     }
 
+#if PYTHON_VERSION >= 350
+    if ( cls == (PyObject *)&PyCoro_Type && Nuitka_Coroutine_Check( inst ) )
+    {
+        return true;
+    }
+#endif
+
     // May need to be recursive for tuple arguments.
     if ( PyTuple_Check( cls ) )
     {
@@ -1864,7 +1893,11 @@ int Nuitka_IsInstance( PyObject *inst, PyObject *cls )
     }
     else
     {
-        PyObject *result = CALL_FUNCTION_WITH_ARGS2( original_isinstance, inst, cls );
+        PyObject *args[] = { inst, cls };
+        PyObject *result = CALL_FUNCTION_WITH_ARGS2(
+            original_isinstance,
+            args
+        );
 
         if ( result == NULL )
         {
@@ -2038,10 +2071,6 @@ int Nuitka_BuiltinModule_SetAttr( PyModuleObject *module, PyObject *name, PyObje
 #include <libgen.h>
 #endif
 
-#if defined(_WIN32) && !defined(PATH_MAX)
-#define PATH_MAX MAXPATHLEN
-#endif
-
 #if defined( __FreeBSD__ )
 #include <sys/sysctl.h>
 #endif
@@ -2050,7 +2079,7 @@ int Nuitka_BuiltinModule_SetAttr( PyModuleObject *module, PyObject *name, PyObje
 
 char *getBinaryDirectoryUTF8Encoded()
 {
-    static char binary_directory[ PATH_MAX + 1 ];
+    static char binary_directory[ MAXPATHLEN + 1 ];
     static bool init_done = false;
 
     if ( init_done )
@@ -2061,21 +2090,21 @@ char *getBinaryDirectoryUTF8Encoded()
 #if defined(_WIN32)
 
 #if PYTHON_VERSION >= 300
-    WCHAR binary_directory2[ PATH_MAX + 1 ];
+    WCHAR binary_directory2[ MAXPATHLEN + 1 ];
     binary_directory2[0] = 0;
 
-    DWORD res = GetModuleFileNameW( NULL, binary_directory2, PATH_MAX + 1 );
+    DWORD res = GetModuleFileNameW( NULL, binary_directory2, MAXPATHLEN + 1 );
     assert( res != 0 );
 
-    int res2 = WideCharToMultiByte( CP_UTF8, 0, binary_directory2, -1, binary_directory, PATH_MAX+1, NULL, NULL );
+    int res2 = WideCharToMultiByte( CP_UTF8, 0, binary_directory2, -1, binary_directory, MAXPATHLEN + 1, NULL, NULL );
     assert( res2 != 0 );
 #else
-    DWORD res = GetModuleFileName( NULL, binary_directory, PATH_MAX + 1 );
+    DWORD res = GetModuleFileName( NULL, binary_directory, MAXPATHLEN + 1 );
     assert( res != 0 );
 #endif
     PathRemoveFileSpec( binary_directory );
 #elif defined(__APPLE__)
-    uint32_t bufsize = PATH_MAX + 1;
+    uint32_t bufsize = MAXPATHLEN + 1;
     int res =_NSGetExecutablePath( binary_directory, &bufsize );
 
     if (unlikely( res != 0 ))
@@ -2085,24 +2114,29 @@ char *getBinaryDirectoryUTF8Encoded()
 
     // On MacOS, the "dirname" call creates a separate internal string, we can
     // safely copy back.
-    strncpy(binary_directory, dirname(binary_directory), PATH_MAX + 1);
+    strncpy(binary_directory, dirname(binary_directory), MAXPATHLEN + 1);
 
 #elif defined( __FreeBSD__ )
-    // Not all of FreeBSD has /proc file system, so use the appropiate
-    // "sysctl" instead.
+    /* Not all of FreeBSD has /proc file system, so use the appropriate
+     * "sysctl" instead.
+     */
     int mib[4];
     mib[0] = CTL_KERN;
     mib[1] = KERN_PROC;
     mib[2] = KERN_PROC_PATHNAME;
     mib[3] = -1;
-    size_t cb = sizeof(binary_directory);
-    sysctl(mib, 4, binary_directory, &cb, NULL, 0);
+    size_t cb = sizeof( binary_directory );
+    sysctl( mib, 4, binary_directory, &cb, NULL, 0 );
+
+    /* We want the directory name, the above gives the full executable name. */
+    strcpy( binary_directory, dirname( binary_directory ) );
 #else
-    // The remaining platforms, mostly Linux.
-    // The "readlink" does not terminate result, so fill zeros there, then
-    // it is a proper C string right away.
-    memset( binary_directory, 0, PATH_MAX + 1 );
-    ssize_t res = readlink( "/proc/self/exe", binary_directory, PATH_MAX );
+    /* The remaining platforms, mostly Linux or compatible. */
+
+    /* The "readlink" call does not terminate result, so fill zeros there, then
+     * it is a proper C string right away. */
+    memset( binary_directory, 0, MAXPATHLEN + 1 );
+    ssize_t res = readlink( "/proc/self/exe", binary_directory, MAXPATHLEN );
 
     if (unlikely( res == -1 ))
     {
@@ -2118,7 +2152,7 @@ char *getBinaryDirectoryUTF8Encoded()
 char *getBinaryDirectoryHostEncoded()
 {
 #if defined(_WIN32)
-    static char binary_directory[ PATH_MAX + 1 ];
+    static char binary_directory[ MAXPATHLEN + 1 ];
     static bool init_done = false;
 
     if ( init_done )
@@ -2127,16 +2161,16 @@ char *getBinaryDirectoryHostEncoded()
     }
 
 #if PYTHON_VERSION >= 300
-    WCHAR binary_directory2[ PATH_MAX + 1 ];
+    WCHAR binary_directory2[ MAXPATHLEN + 1 ];
     binary_directory2[0] = 0;
 
-    DWORD res = GetModuleFileNameW( NULL, binary_directory2, PATH_MAX + 1 );
+    DWORD res = GetModuleFileNameW( NULL, binary_directory2, MAXPATHLEN + 1 );
     assert( res != 0 );
 
-    int res2 = WideCharToMultiByte( CP_ACP, 0, binary_directory2, -1, binary_directory, PATH_MAX+1, NULL, NULL );
+    int res2 = WideCharToMultiByte( CP_ACP, 0, binary_directory2, -1, binary_directory, MAXPATHLEN + 1, NULL, NULL );
     assert( res2 != 0 );
 #else
-    DWORD res = GetModuleFileName( NULL, binary_directory, PATH_MAX + 1 );
+    DWORD res = GetModuleFileName( NULL, binary_directory, MAXPATHLEN + 1 );
     assert( res != 0 );
 #endif
     PathRemoveFileSpec( binary_directory );
@@ -2176,12 +2210,12 @@ static PyObject *getBinaryDirectoryObject()
 static char *getDllDirectory()
 {
 #if defined(_WIN32)
-    static char path[ PATH_MAX ];
+    static char path[ MAXPATHLEN + 1 ];
     HMODULE hm = NULL;
     path[0] = '\0';
 
 #if PYTHON_VERSION >= 300
-    WCHAR path2[ PATH_MAX + 1 ];
+    WCHAR path2[ MAXPATHLEN + 1 ];
     path2[0] = 0;
 
     int res = GetModuleHandleExA(
@@ -2191,7 +2225,7 @@ static char *getDllDirectory()
     );
     assert( res != 0 );
 
-    int res2 = WideCharToMultiByte(CP_UTF8, 0, path2, -1, path, PATH_MAX+1, NULL, NULL);
+    int res2 = WideCharToMultiByte(CP_UTF8, 0, path2, -1, path, MAXPATHLEN + 1, NULL, NULL);
     assert( res2 != 0 );
 #else
     int res = GetModuleHandleExA(
@@ -2427,24 +2461,41 @@ PyObject *CALL_FUNCTION_NO_ARGS( PyObject *called )
         }
 
         Nuitka_FunctionObject *function = (Nuitka_FunctionObject *)called;
+
         PyObject *result;
 
-        if ( function->m_direct_arg_parser )
+        if ( function->m_args_simple && 0 == function->m_args_positional_count )
         {
-            result = function->m_direct_arg_parser(
-                function,
-                NULL,
-                0
-            );
+            result = function->m_c_code( function, NULL );
+        }
+        else if ( function->m_args_simple && function->m_defaults_given == function->m_args_positional_count )
+        {
+            PyObject **python_pars = &PyTuple_GET_ITEM( function->m_defaults, 0 );
+
+            for( Py_ssize_t i = 0; i < function->m_defaults_given; i++ )
+            {
+                Py_INCREF( python_pars[ i ] );
+            }
+
+            result = function->m_c_code( function, python_pars );
         }
         else
         {
-            result = function->m_code(
-                function,
-                NULL,
-                0,
-                NULL
-            );
+#ifdef _MSC_VER
+            PyObject **python_pars = (PyObject **)_alloca( sizeof( PyObject * ) * function->m_args_overall_count );
+#else
+            PyObject *python_pars[ function->m_args_overall_count ];
+#endif
+            memset( python_pars, 0, function->m_args_overall_count * sizeof(PyObject *) );
+
+            if ( parseArgumentsPos( function, python_pars, NULL, 0 ) )
+            {
+                result = function->m_c_code( function, python_pars );
+            }
+            else
+            {
+                result = NULL;
+            }
         }
 
         Py_LeaveRecursiveCall();
@@ -2463,27 +2514,35 @@ PyObject *CALL_FUNCTION_NO_ARGS( PyObject *called )
                 return NULL;
             }
 
-            PyObject *args[1] = {
-                method->m_object
-            };
+            Nuitka_FunctionObject *function = method->m_function;
             PyObject *result;
 
-            if ( method->m_function->m_direct_arg_parser )
+            if ( function->m_args_simple && 1 == function->m_args_positional_count )
             {
-                result = method->m_function->m_direct_arg_parser(
-                    method->m_function,
-                    args,
-                    1
-                );
+                Py_INCREF( method->m_object );
+
+                result = function->m_c_code( function, &method->m_object );
+            }
+            else if ( function->m_args_simple && function->m_defaults_given == function->m_args_positional_count - 1 )
+            {
+#ifdef _MSC_VER
+                PyObject **python_pars = (PyObject **)_alloca( sizeof( PyObject * ) * function->m_args_overall_count );
+#else
+                PyObject *python_pars[ function->m_args_overall_count ];
+#endif
+                python_pars[0] = method->m_object;
+                memcpy( python_pars+1, &PyTuple_GET_ITEM( function->m_defaults, 0 ), sizeof(PyObject *) * function->m_defaults_given );
+
+                for( Py_ssize_t i = 0; i < function->m_args_positional_count; i++ )
+                {
+                    Py_INCREF( python_pars[ i ] );
+                }
+
+                result = function->m_c_code( function, python_pars );
             }
             else
             {
-                result = method->m_function->m_code(
-                    method->m_function,
-                    args,
-                    1,
-                    NULL
-                );
+                result = Nuitka_CallMethodFunctionNoArgs( function, method->m_object );
             }
 
             Py_LeaveRecursiveCall();
@@ -2517,22 +2576,10 @@ void setEarlyFrozenModulesFileAttribute( void )
     Py_ssize_t ppos = 0;
     PyObject *key, *value;
 
-    PyObject *file_value = getBinaryDirectoryObject();
-
-    char sep[2] = { SEP, 0 };
-
 #if PYTHON_VERSION < 300
-    file_value = PyNumber_InPlaceAdd( file_value, PyString_FromString( sep ) );
+    PyObject *file_value = MAKE_RELATIVE_PATH( PyString_FromString( "not_present.py" ) );
 #else
-    file_value = PyNumber_InPlaceAdd( file_value, PyUnicode_FromString( sep ) );
-#endif
-
-    assert( file_value );
-
-#if PYTHON_VERSION < 300
-    file_value = PyNumber_InPlaceAdd( file_value, PyString_FromString( "not_present.py" ) );
-#else
-    file_value = PyNumber_InPlaceAdd( file_value, PyUnicode_FromString( "not_present.py" ) );
+    PyObject *file_value = MAKE_RELATIVE_PATH( PyUnicode_FromString( "not_present.py" ) );
 #endif
 
     assert( file_value );
@@ -2547,6 +2594,8 @@ void setEarlyFrozenModulesFileAttribute( void )
             }
         }
     }
+
+    Py_DECREF( file_value );
 
     assert( !ERROR_OCCURRED() );
 }
@@ -2695,28 +2744,23 @@ PyObject *MAKE_RELATIVE_PATH( PyObject *relative )
 #endif
     }
 
-    CHECK_OBJECT( our_path_object );
+    char sep[2] = { SEP, 0 };
 
-    static PyObject *os_path_join = NULL;
+#if PYTHON_VERSION < 300
+    PyObject *result = PyNumber_Add( our_path_object, PyString_FromString( sep ) );
+#else
+    PyObject *result = PyNumber_Add( our_path_object, PyUnicode_FromString( sep ) );
+#endif
 
-    if ( os_path_join == NULL )
-    {
-        PyObject *os_path = PyImport_ImportModule("os.path");
-        CHECK_OBJECT(os_path);
+    assert( result );
 
-        os_path_join = PyObject_GetAttrString(os_path, "join");
-        CHECK_OBJECT(os_path_join);
+#if PYTHON_VERSION < 300
+    result = PyNumber_InPlaceAdd( result, relative );
+#else
+    result = PyNumber_InPlaceAdd( result, relative );
+#endif
 
-        Py_DECREF(os_path);
-    }
-
-    PyObject *result = PyObject_CallFunctionObjArgs( os_path_join, our_path_object, relative, NULL );
-
-    if (unlikely( result == NULL ))
-    {
-        PyErr_Print();
-        abort();
-    }
+    assert( result );
 
     return result;
 }
@@ -3713,20 +3757,20 @@ PyObject *DEEP_COPY( PyObject *value )
             {
                 PyDictKeyEntry *entry = &mp->ma_keys->dk_entries[i];
 
-                PyObject *value;
+                PyObject *value2;
 
                 if ( mp->ma_values )
                 {
-                    value = mp->ma_values[ i ];
+                    value2 = mp->ma_values[ i ];
                 }
                 else
                 {
-                    value = entry->me_value;
+                    value2 = entry->me_value;
                 }
 
-                if ( value != NULL )
+                if ( value2 != NULL )
                 {
-                    PyObject *deep_copy = DEEP_COPY( value );
+                    PyObject *deep_copy = DEEP_COPY( value2 );
 
                     PyDict_SetItem(
                         result,
@@ -3811,7 +3855,10 @@ PyObject *DEEP_COPY( PyObject *value )
 
 static Py_hash_t DEEP_HASH_INIT( PyObject *value )
 {
-    Py_hash_t result = Py_hash_t( value );
+    // To avoid warnings about reduced sizes, we put an intermediate value
+    // that is size_t.
+    size_t value2 = (size_t)value;
+    Py_hash_t result = Py_hash_t( value2 );
 
     if ( Py_TYPE( value ) != &PyType_Type )
     {

@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -18,7 +18,9 @@
 """ This is the main actions of Nuitka.
 
 This can do all the steps to translate one module to a target language using
-the Python C/API, to compile it to either an executable or an extension module.
+the Python C/API, to compile it to either an executable or an extension
+module, potentially with bytecode included and used library copied into
+a distribution folder.
 
 """
 
@@ -29,27 +31,18 @@ import sys
 from logging import info, warning
 
 from nuitka.importing import Importing, Recursion
-from nuitka.plugins.PluginBase import Plugins
-from nuitka.PythonVersions import isUninstalledPython
+from nuitka.Options import getPythonFlags
+from nuitka.plugins.Plugins import Plugins
+from nuitka.PythonVersions import isUninstalledPython, python_version
 from nuitka.tree import SyntaxErrors
-from nuitka.utils import InstanceCounters, Utils
+from nuitka.utils import InstanceCounters, MemoryUsage, Utils
 
 from . import ModuleRegistry, Options, Tracing, TreeXML
 from .build import SconsInterface
-from .codegen import CodeGeneration, ConstantCodes, MainCodes
+from .codegen import CodeGeneration, ConstantCodes
 from .finalizations import Finalization
-from .freezer.BytecodeModuleFreezer import (
-    addFrozenModule,
-    generateBytecodeFrozenCode,
-    getFrozenModuleCount,
-    isFrozenModule,
-    removeFrozenModule
-)
-from .freezer.Standalone import (
-    copyUsedDLLs,
-    detectEarlyImports,
-    detectLateImports
-)
+from .freezer.BytecodeModuleFreezer import generateBytecodeFrozenCode
+from .freezer.Standalone import copyUsedDLLs, detectEarlyImports
 from .optimizations import Optimization
 from .tree import Building
 
@@ -80,10 +73,12 @@ def createNodeTree(filename):
     if not Options.shallOnlyExecCppCall():
         cleanSourceDirectory(source_dir)
 
+    # Prepare the ".dist" directory, throwing away what was there before.
     if Options.isStandaloneMode():
         standalone_dir = getStandaloneDirectoryPath(main_module)
         shutil.rmtree(standalone_dir, ignore_errors = True)
         Utils.makePath(standalone_dir)
+
     Utils.deleteFile(
         path       = getResultFullpath(main_module),
         must_exist = False
@@ -125,7 +120,7 @@ def getTreeFilenameWithSuffix(tree, suffix):
 
 
 def getSourceDirectoryPath(main_module):
-    assert main_module.isPythonModule()
+    assert main_module.isCompiledPythonModule()
 
     return Options.getOutputPath(
         path = Utils.basename(
@@ -143,7 +138,7 @@ def getStandaloneDirectoryPath(main_module):
 
 
 def getResultBasepath(main_module):
-    assert main_module.isPythonModule()
+    assert main_module.isCompiledPythonModule()
 
     if Options.isStandaloneMode():
         return Utils.joinpath(
@@ -272,9 +267,9 @@ def makeSourceDirectory(main_module):
 
     """
     # We deal with a lot of details here, but rather one by one, and split makes
-    # no sense, pylint: disable=R0912
+    # no sense, pylint: disable=R0912,R0914
 
-    assert main_module.isPythonModule()
+    assert main_module.isCompiledPythonModule()
 
     # The global context used to generate code.
     global_context = CodeGeneration.makeGlobalContext()
@@ -285,20 +280,24 @@ def makeSourceDirectory(main_module):
     # fun, and to find its imports. In this case, now we just can drop it. Or
     # a module may shadow a frozen module, but be a different one, then we can
     # drop the frozen one.
+    # TODO: This really should be done when the compiled module comes into
+    # existence.
     for module in ModuleRegistry.getDoneUserModules():
-        if module.isPythonModule():
-            if isFrozenModule(module.getFullName(), module.getCompileTimeFilename()):
-                ModuleRegistry.removeDoneModule(module)
-                continue
+        if module.isCompiledPythonModule():
+            uncompiled_module = ModuleRegistry.getUncompiledModule(
+                module_name     = module.getFullName(),
+                module_filename = module.getCompileTimeFilename()
+            )
 
-            if removeFrozenModule(module.getFullName()):
-                warning(
-                    """\
-Compiled module shadows standard library module '%s' (imported from '%s').""" % (
-                        module.getFullName(),
-                        module.getCompileTimeFilename()
-                    )
-                )
+            if uncompiled_module is not None:
+                # We now need to decide which one to keep, compiled or uncompiled
+                # module. Some uncompiled modules may have been asked by the user
+                # or technically required. By default, frozen code if it exists
+                # is preferred, as it will be from standalone mode adding it.
+                if uncompiled_module.isUserProvided():
+                    ModuleRegistry.removeDoneModule(module)
+                else:
+                    ModuleRegistry.removeUncompiledModule(uncompiled_module)
 
     # Lets check if the recurse-to modules are actually present, and warn the
     # user if one of those was not found.
@@ -314,7 +313,7 @@ Compiled module shadows standard library module '%s' (imported from '%s').""" % 
 
     # Prepare code generation, i.e. execute finalization for it.
     for module in ModuleRegistry.getDoneModules():
-        if module.isPythonModule():
+        if module.isCompiledPythonModule():
             Finalization.prepareCodeGeneration(module)
 
     # Pick filenames.
@@ -331,7 +330,7 @@ Compiled module shadows standard library module '%s' (imported from '%s').""" % 
     prepared_modules = {}
 
     for module in ModuleRegistry.getDoneModules():
-        if module.isPythonModule():
+        if module.isCompiledPythonModule():
             cpp_filename = module_filenames[module]
 
             prepared_modules[cpp_filename] = CodeGeneration.prepareModuleCode(
@@ -346,7 +345,7 @@ Compiled module shadows standard library module '%s' (imported from '%s').""" % 
 
     # Second pass, generate the actual module code into the files.
     for module in ModuleRegistry.getDoneModules():
-        if module.isPythonModule():
+        if module.isCompiledPythonModule():
             cpp_filename = module_filenames[module]
 
             template_values, module_context = prepared_modules[cpp_filename]
@@ -356,14 +355,6 @@ Compiled module shadows standard library module '%s' (imported from '%s').""" % 
                 template_values = template_values
             )
 
-            # The main of an executable module gets a bit different code.
-            if module is main_module and not Options.shallMakeModule():
-                source_code = MainCodes.generateMainCode(
-                    main_module = main_module,
-                    context     = module_context,
-                    codes       = source_code
-                )
-
             writeSourceCode(
                 filename    = cpp_filename,
                 source_code = source_code
@@ -371,7 +362,6 @@ Compiled module shadows standard library module '%s' (imported from '%s').""" % 
 
             if Options.isShowInclusion():
                 info("Included compiled module '%s'." % module.getFullName())
-
         elif module.isPythonShlibModule():
             target_filename = Utils.joinpath(
                 getStandaloneDirectoryPath(main_module),
@@ -396,6 +386,8 @@ Compiled module shadows standard library module '%s' (imported from '%s').""" % 
             standalone_entry_points.append(
                 (target_filename, module.getPackage())
             )
+        elif module.isUncompiledPythonModule():
+            pass
         else:
             assert False, module
 
@@ -425,17 +417,17 @@ def runScons(main_module, quiet):
     # Scons gets transported many details, that we express as variables, and
     # have checks for them, leading to many branches, pylint: disable=R0912
 
-    python_version = "%d.%d" % (sys.version_info[0], sys.version_info[1])
+    python_version_str = "%d.%d" % (sys.version_info[0], sys.version_info[1])
 
     if hasattr(sys, "abiflags"):
         if Options.isPythonDebug() or \
            hasattr(sys, "getobjects"):
             if sys.abiflags.startswith('d'):
-                python_version += sys.abiflags
+                python_version_str += sys.abiflags
             else:
-                python_version += 'd' + sys.abiflags
+                python_version_str += 'd' + sys.abiflags
         else:
-            python_version += sys.abiflags
+            python_version_str += sys.abiflags
 
     def asBoolStr(value):
         return "true" if value else "false"
@@ -454,12 +446,14 @@ def runScons(main_module, quiet):
         "full_compat"     : asBoolStr(Options.isFullCompat()),
         "experimental"    : asBoolStr(Options.isExperimental()),
         "trace_mode"      : asBoolStr(Options.shallTraceExecution()),
-        "python_version"  : python_version,
+        "python_version"  : python_version_str,
         "target_arch"     : Utils.getArchitecture(),
         "python_prefix"   : sys.prefix,
         "nuitka_src"      : SconsInterface.getSconsDataPath(),
         "module_count"    : "%d" % (
-            len(ModuleRegistry.getDoneUserModules()) + 1
+            1 + \
+            len(ModuleRegistry.getDoneUserModules()) + \
+            len(ModuleRegistry.getUncompiledNonTechnicalModules())
         )
     }
 
@@ -482,9 +476,9 @@ def runScons(main_module, quiet):
        isUninstalledPython():
         options["uninstalled_python"] = "true"
 
-    if getFrozenModuleCount():
+    if ModuleRegistry.getUncompiledTechnicalModules():
         options["frozen_modules"] = str(
-            getFrozenModuleCount()
+            len(ModuleRegistry.getUncompiledTechnicalModules())
         )
 
     if Options.isShowScons():
@@ -511,6 +505,28 @@ def runScons(main_module, quiet):
     if Options.isProfile():
         options["profile_mode"] = "true"
 
+    if "no_warnings" in getPythonFlags():
+        options["no_python_warnings"] = "true"
+
+    if python_version < 300 and sys.flags.py3k_warning:
+        options["python_sysflag_py3k_warning"] = "true"
+
+    if python_version < 300 and (sys.flags.division_warning or sys.flags.py3k_warning):
+        options["python_sysflag_division_warning"] = "true"
+
+    if sys.flags.bytes_warning:
+        options["python_sysflag_bytes_warning"] = "true"
+
+    if int(os.environ.get("NUITKA_SITE_FLAG", "no_site" in Options.getPythonFlags())):
+        options["python_sysflag_no_site"] = "true"
+
+    if "trace_imports" in Options.getPythonFlags():
+        options["python_sysflag_verbose"] = "true"
+
+    if python_version < 300 and sys.flags.unicode:
+        options["python_sysflag_unicode"] = "true"
+
+
     return SconsInterface.runScons(options, quiet), options
 
 
@@ -519,7 +535,7 @@ def writeSourceCode(filename, source_code):
     # or something else has failed.
     assert not Utils.isFile(filename), filename
 
-    if Utils.python_version >= 300:
+    if python_version >= 300:
         with open(filename, "wb") as output_file:
             output_file.write(source_code.encode("latin1"))
     else:
@@ -555,7 +571,7 @@ def callExec(args, clean_path, add_path):
     sys.stderr.flush()
 
     # Add the main arguments, previous separated.
-    args += Options.getMainArgs()
+    args += Options.getPositionalArgs()[1:] + Options.getMainArgs()
 
     Utils.callExec(args)
 
@@ -599,13 +615,9 @@ def compileTree(main_module):
             main_module = main_module
         )
 
-        if Options.isStandaloneMode():
-            for late_import in detectLateImports():
-                addFrozenModule(late_import)
+        frozen_code = generateBytecodeFrozenCode()
 
-        if getFrozenModuleCount():
-            frozen_code = generateBytecodeFrozenCode()
-
+        if frozen_code is not None:
             writeSourceCode(
                 filename    = Utils.joinpath(
                     source_dir,
@@ -627,7 +639,7 @@ def compileTree(main_module):
     if Options.isShowProgress() or Options.isShowMemory():
         Tracing.printLine(
             "Total memory usage before running scons: {memory}:".format(
-                memory = Utils.getHumanReadableProcessMemoryUsage()
+                memory = MemoryUsage.getHumanReadableProcessMemoryUsage()
             )
         )
 
@@ -676,12 +688,12 @@ def main():
     # Detect to be frozen modules if any, so we can consider to not recurse
     # to them.
     if Options.isStandaloneMode():
-        for early_import in detectEarlyImports():
-            addFrozenModule(early_import)
+        for module in detectEarlyImports():
+            ModuleRegistry.addUncompiledModule(module)
 
-            if early_import[0] == "site":
+            if module.getName() == "site":
                 origin_prefix_filename = Utils.joinpath(
-                    Utils.dirname(early_import[3]),
+                    Utils.dirname(module.getCompileTimeFilename()),
                     "orig-prefix.txt"
                 )
 
@@ -739,21 +751,33 @@ def main():
                     Plugins.considerExtraDlls(dist_dir, module)
                 )
 
-            if Utils.getOS() == "NetBSD":
-                warning("Standalone mode on NetBSD is not functional, due to $ORIGIN linkage not being supported.")
+            for module in ModuleRegistry.getUncompiledModules():
+                standalone_entry_points.extend(
+                    Plugins.considerExtraDlls(dist_dir, module)
+                )
 
             copyUsedDLLs(
                 dist_dir                = dist_dir,
                 standalone_entry_points = standalone_entry_points
             )
 
+
+            for module in ModuleRegistry.getDoneModules():
+                data_files.extend(
+                    Plugins.considerDataFiles(module)
+                )
+
             for source_filename, target_filename in data_files:
+                target_filename = Utils.joinpath(
+                    getStandaloneDirectoryPath(main_module),
+                    target_filename
+                )
+
+                Utils.makePath(Utils.dirname(target_filename))
+
                 shutil.copy2(
                     source_filename,
-                    Utils.joinpath(
-                        getStandaloneDirectoryPath(main_module),
-                        target_filename
-                    )
+                    target_filename
                 )
 
         # Modules should not be executable, but Scons creates them like it, fix

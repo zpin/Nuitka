@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -39,7 +39,8 @@ class VariableTraceBase:
     # We are going to have many instance attributes, pylint: disable=R0902
 
     @InstanceCounters.counted_init
-    def __init__(self, variable, version, previous):
+    def __init__(self, owner, variable, version, previous):
+        self.owner = owner
         self.variable = variable
         self.version = version
 
@@ -127,6 +128,7 @@ class VariableTraceBase:
         # TODO: Temporarily disable far reaching of assumptions, until value
         # escaping can be trusted.
         if self.variable.isModuleVariable() or \
+           self.variable.isMaybeLocalVariable() or \
            self.variable.isSharedTechnically():
             return False
 
@@ -146,11 +148,17 @@ class VariableTraceBase:
 
         return None
 
+    def hasShapeDictionaryExact(self):
+        # Virtual method, pylint: disable=R0201
+        return False
+
+
 
 class VariableTraceUninit(VariableTraceBase):
-    def __init__(self, variable, version, previous):
+    def __init__(self, owner, variable, version, previous):
         VariableTraceBase.__init__(
             self,
+            owner    = owner,
             variable = variable,
             version  = version,
             previous = previous
@@ -185,9 +193,10 @@ class VariableTraceUninit(VariableTraceBase):
 
 
 class VariableTraceInit(VariableTraceBase):
-    def __init__(self, variable, version):
+    def __init__(self, owner, variable, version):
         VariableTraceBase.__init__(
             self,
+            owner    = owner,
             variable = variable,
             version  = version,
             previous = None
@@ -222,9 +231,10 @@ class VariableTraceInit(VariableTraceBase):
 
 
 class VariableTraceUnknown(VariableTraceBase):
-    def __init__(self, variable, version, previous):
+    def __init__(self, owner, variable, version, previous):
         VariableTraceBase.__init__(
             self,
+            owner    = owner,
             variable = variable,
             version  = version,
             previous = previous
@@ -280,9 +290,10 @@ class VariableTraceUnknown(VariableTraceBase):
 
 
 class VariableTraceAssign(VariableTraceBase):
-    def __init__(self, assign_node, variable, version, previous):
+    def __init__(self, owner, assign_node, variable, version, previous):
         VariableTraceBase.__init__(
             self,
+            owner    = owner,
             variable = variable,
             version  = version,
             previous = previous
@@ -325,11 +336,13 @@ class VariableTraceAssign(VariableTraceBase):
         self.replace_it = replacement
 
     def getReplacementNode(self, usage):
-
         if self.replace_it is not None:
             return self.replace_it(usage)
         else:
             return None
+
+    def hasShapeDictionaryExact(self):
+        return self.assign_node.getAssignSource().hasShapeDictionaryExact()
 
 
 class VariableTraceMerge(VariableTraceBase):
@@ -342,6 +355,7 @@ class VariableTraceMerge(VariableTraceBase):
     def __init__(self, variable, version, traces):
         VariableTraceBase.__init__(
             self,
+            owner    = traces[0].owner,
             variable = variable,
             version  = version,
             previous = tuple(traces)
@@ -418,6 +432,13 @@ class VariableTraceMerge(VariableTraceBase):
             for previous in self.previous:
                 previous.addPotentialUsage()
 
+    def hasShapeDictionaryExact(self):
+        for previous in self.previous:
+            if not previous.hasShapeDictionaryExact():
+                return False
+
+        return True
+
 
 class VariableTraceLoopMerge(VariableTraceBase):
     """ Merge of loop wrap around with loop start value.
@@ -433,6 +454,7 @@ class VariableTraceLoopMerge(VariableTraceBase):
     def __init__(self, variable, version, previous):
         VariableTraceBase.__init__(
             self,
+            owner    = previous.owner,
             variable = variable,
             version  = version,
             previous = previous

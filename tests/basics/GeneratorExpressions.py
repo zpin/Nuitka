@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Python tests originally created or extracted from other peoples work. The
 #     parts were too small to be protected.
@@ -16,6 +16,8 @@
 #     limitations under the License.
 #
 from __future__ import print_function
+
+import inspect
 
 print("Generator expression that demonstrates the timing:")
 def iteratorCreationTiming():
@@ -65,17 +67,16 @@ def iteratorCreationTiming():
     try:
         next(gen)
     except StopIteration:
-        print("Use past end gave StopIteration as expected")
+        print("Usage past end gave StopIteration exception as expected.")
 
         try:
-            import inspect
             print("Generator state then is", inspect.getgeneratorstate(gen))  # @UndefinedVariable
         except AttributeError:
             pass
 
         print("Its frame is now", gen.gi_frame)
 
-    print("Early aborting generator")
+    print("Early aborting generator:")
 
     gen2 = ( (y,z) for y in getIterable(3) for z in getIterable(2) )
     del gen2

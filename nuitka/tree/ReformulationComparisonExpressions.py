@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -81,7 +81,6 @@ def buildComplexComparisonNode(provider, left, rights, comparators, source_ref):
     outline_body = ExpressionOutlineBody(
         provider   = provider,
         name       = "comparison_chain",
-        body       = None, # later
         source_ref = source_ref
     )
 

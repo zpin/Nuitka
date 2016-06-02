@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -69,17 +69,6 @@ Return statement raises in returned expression, removed return."""
         constraint_collection.onFunctionReturn()
 
         return self, None, None
-
-
-class StatementGeneratorReturn(StatementReturn):
-    kind = "STATEMENT_GENERATOR_RETURN"
-
-    def __init__(self, expression, source_ref):
-        StatementReturn.__init__(
-            self,
-            expression = expression,
-            source_ref = source_ref
-        )
 
 
 class ExpressionReturnedValueRef(NodeBase, ExpressionMixin):

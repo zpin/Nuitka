@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -58,6 +58,13 @@ from .Helpers import (
 from .ReformulationTryFinallyStatements import makeTryFinallyStatement
 
 
+def _getLocalsClassNode(provider):
+    if provider.isCompiledPythonModule():
+        return ExpressionBuiltinGlobals
+    else:
+        return ExpressionBuiltinLocals
+
+
 def wrapEvalGlobalsAndLocals(provider, globals_node, locals_node,
                              temp_scope, source_ref):
     """ Wrap the locals and globals arguments for "eval".
@@ -90,7 +97,7 @@ def wrapEvalGlobalsAndLocals(provider, globals_node, locals_node,
 
     post_statements = []
 
-    if provider.isExpressionFunctionBody() and provider.isClassDictCreation():
+    if provider.isExpressionClassBody():
         post_statements.append(
             StatementLocalsDictSync(
                 locals_arg = ExpressionTempVariableRef(
@@ -129,7 +136,7 @@ def wrapEvalGlobalsAndLocals(provider, globals_node, locals_node,
             variable   = globals_keeper_variable,
             source_ref = source_ref
         ),
-        expression_yes = ExpressionBuiltinLocals(
+        expression_yes = _getLocalsClassNode(provider)(
             source_ref = source_ref
         ),
         source_ref     = source_ref
@@ -267,7 +274,7 @@ exec: arg 1 must be a string, file, or code object""",
                 source_ref      = source_ref
             )
 
-    if provider.isExpressionFunctionBody():
+    if not provider.isCompiledPythonModule():
         provider.markAsExecContaining()
 
         if orig_globals is None:
@@ -395,7 +402,7 @@ exec: arg 1 must be a string, file, or code object""",
                                 variable   = locals_keeper_variable,
                                 source_ref = source_ref
                             ),
-                            source       = ExpressionBuiltinLocals(
+                            source       = _getLocalsClassNode(provider)(
                                 source_ref = source_ref
                             ),
                             source_ref   = source_ref,

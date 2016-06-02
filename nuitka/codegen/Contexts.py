@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -20,11 +20,12 @@
 """
 
 import hashlib
+import sys
 
 from nuitka import Options
 from nuitka.__past__ import iterItems
 from nuitka.Constants import constant_builtin_types
-from nuitka.utils.Utils import python_version
+from nuitka.PythonVersions import python_version
 
 from .Namify import namifyConstant
 
@@ -218,28 +219,22 @@ class CodeObjectsMixin:
     def getCodeObjects(self):
         return sorted(iterItems(self.code_objects))
 
-    # Sad but true, code objects have these many details that actually are fed
-    # from all different sources, pylint: disable=R0913
-    def getCodeObjectHandle(self, filename, code_name, line_number, var_names,
-                            arg_count, kw_only_count, is_generator,
-                            is_optimized, has_starlist, has_stardict,
-                            has_closure, future_flags):
-        var_names = tuple(var_names)
-
-        assert type(has_starlist) is bool
-        assert type(has_stardict) is bool
+    def getCodeObjectHandle(self, code_object, filename, line_number,
+                            is_optimized, new_locals, has_closure,
+                            future_flags):
 
         key = (
             filename,
-            code_name,
+            code_object.getCodeObjectName(),
             line_number,
-            var_names,
-            arg_count,
-            kw_only_count,
-            is_generator,
+            code_object.getVarNames(),
+            code_object.getArgumentCount(),
+            code_object.getKwOnlyParameterCount(),
+            code_object.getKind(),
             is_optimized,
-            has_starlist,
-            has_stardict,
+            new_locals,
+            code_object.hasStarListArg(),
+            code_object.hasStarDictArg(),
             has_closure,
             future_flags
         )
@@ -252,14 +247,14 @@ class CodeObjectsMixin:
     if python_version < 300:
         def _calcHash(self, key):
             hash_value = hashlib.md5(
-                "%s%s%d%s%d%d%s%s%s%s%s%s" % key
+                "%s%s%d%s%d%d%s%s%s%s%s%s%s" % key
             )
 
             return hash_value.hexdigest()
     else:
         def _calcHash(self, key):
             hash_value = hashlib.md5(
-                ("%s%s%d%s%d%d%s%s%s%s%s%s" % key).encode("utf-8")
+                ("%s%s%d%s%d%d%s%s%s%s%s%s%s" % key).encode("utf-8")
             )
 
             return hash_value.hexdigest()
@@ -271,7 +266,7 @@ class PythonContextBase:
 
         self.source_ref = None
 
-    def isPythonModule(self):
+    def isCompiledPythonModule(self):
         return False
 
     def allocateTempNumber(self, tmp_scope):
@@ -307,7 +302,10 @@ class PythonChildContextBase(PythonContextBase):
 
 
 def _getConstantDefaultPopulation():
-    result = (
+    # Note: Can't work with set here, because we need to put in some values that
+    # cannot be hashed.
+
+    result = [
         # Basic values that the helper code uses all the times.
         (),
         {},
@@ -329,6 +327,7 @@ def _getConstantDefaultPopulation():
         "__dict__",
         "__doc__",
         "__file__",
+        "__path__",
         "__enter__",
         "__exit__",
         "__builtins__",
@@ -339,38 +338,39 @@ def _getConstantDefaultPopulation():
         # Patched module name.
         "inspect",
 
-        # Names of builtins used in helper code.
+        # Names of built-ins used in helper code.
         "compile",
         "range",
         "open",
         "__import__",
-    )
+    ]
 
-    # For Python3 modules
     if python_version >= 300:
+        # For Python3 modules
         result += (
             "__cached__",
-        )
-
-    # For Python3 print
-    if python_version >= 300:
-        result += (
-            "print",
-            "end",
-            "file",
-        )
-
-    if python_version >= 330:
-        result += (
-            # Modules have that attribute.
             "__loader__",
         )
 
-    if python_version >= 340:
+        # For Python3 print
         result += (
-            # YIELD_FROM uses this starting 3.4, with 3.3 other code is used.
-            "send",
+            "print",
+            "end",
+            "file"
         )
+
+    if python_version >= 330:
+        # Modules have that attribute starting with 3.3
+        result.append(
+            "__loader__"
+        )
+
+    if python_version >= 340:
+        result.append(
+            # YIELD_FROM uses this starting 3.4, with 3.3 other code is used.
+            "send"
+        )
+
     if python_version >= 330:
         result += (
             # YIELD_FROM uses this
@@ -379,16 +379,15 @@ def _getConstantDefaultPopulation():
         )
 
 
-    # For patching Python2 internal class type
     if python_version < 300:
+        # For patching Python2 internal class type
         result += (
             "__getattr__",
             "__setattr__",
             "__delattr__",
         )
 
-    # For patching Python2 sys attributes for current exception
-    if python_version < 300:
+        # For patching Python2 "sys" attributes for current exception
         result += (
             "exc_type",
             "exc_value",
@@ -397,41 +396,52 @@ def _getConstantDefaultPopulation():
 
     # The xrange built-in is Python2 only.
     if python_version < 300:
-        result += (
-            "xrange",
+        result.append(
+            "xrange"
         )
 
     # Executables only
     if not Options.shallMakeModule():
-        result += (
-            "__main__",
+        result.append(
+            "__main__"
         )
 
         # The "site" module is referenced in inspect patching.
-        result += (
-            "site",
+        result.append(
+            "site"
         )
 
-    # Builtin original values
+    # Built-in original values
     if not Options.shallMakeModule():
-        result += (
+        result += [
             "type",
             "len",
             "range",
             "repr",
             "int",
             "iter",
-        )
+        ]
 
         if python_version < 300:
-            result += (
+            result.append(
                 "long",
             )
 
     # Disabling warnings at startup
     if "no_warnings" in Options.getPythonFlags():
-        result += (
-            "ignore",
+        result.append(
+            "ignore"
+        )
+
+    if python_version >= 350:
+        # Patching the types module.
+        result.append(
+            "types"
+        )
+
+    if not Options.shallMakeModule():
+        result.append(
+            sys.executable
         )
 
     return result
@@ -547,7 +557,7 @@ class PythonModuleContext(PythonContextBase, TempMixin, CodeObjectsMixin,
     def getOwner(self):
         return self.module
 
-    def isPythonModule(self):
+    def isCompiledPythonModule(self):
         return True
 
     def hasLocalsDict(self):
@@ -577,9 +587,6 @@ class PythonModuleContext(PythonContextBase, TempMixin, CodeObjectsMixin,
 
     # There cannot be local variable in modules no need to consider the name.
     # pylint: disable=W0613
-    def hasLocalVariable(self, var_name):
-        return False
-
     def hasClosureVariable(self, var_name):
         return False
     # pylint: enable=W0613
@@ -677,7 +684,7 @@ class PythonFunctionContext(PythonChildContextBase, TempMixin,
 
     def __repr__(self):
         return "<PythonFunctionContext for %s '%s'>" % (
-            "function" if not self.function.isClassDictCreation() else "class",
+            "function" if not self.function.isExpressionClassBody() else "class",
             self.function.getName()
         )
 
@@ -689,9 +696,6 @@ class PythonFunctionContext(PythonChildContextBase, TempMixin,
 
     def hasLocalsDict(self):
         return self.function.hasLocalsDict()
-
-    def hasLocalVariable(self, var_name):
-        return var_name in self.function.getLocalVariableNames()
 
     def hasClosureVariable(self, var_name):
         return var_name in self.function.getClosureVariableNames()
@@ -747,8 +751,7 @@ class PythonFunctionDirectContext(PythonFunctionContext):
     def isForCreatedFunction(self):
         return False
 
-
-class PythonFunctionCoroutineContext(PythonFunctionContext):
+class PythonGeneratorObjectContext(PythonFunctionContext):
     def isForDirectCall(self):
         return False
 
@@ -757,6 +760,10 @@ class PythonFunctionCoroutineContext(PythonFunctionContext):
 
     def isForCreatedFunction(self):
         return False
+
+
+class PythonCoroutineObjectContext(PythonGeneratorObjectContext):
+    pass
 
 
 class PythonFunctionCreatedContext(PythonFunctionContext):
@@ -782,8 +789,8 @@ class PythonStatementCContext(PythonChildContextBase):
     def getOwner(self):
         return self.parent.getOwner()
 
-    def isPythonModule(self):
-        return self.parent.isPythonModule()
+    def isCompiledPythonModule(self):
+        return self.parent.isCompiledPythonModule()
 
     def getFunction(self):
         return self.parent.getFunction()

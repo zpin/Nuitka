@@ -1,4 +1,4 @@
-//     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+//     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 //
 //     Part of "Nuitka", an optimizing Python compiler that is compatible and
 //     integrates with CPython, but also works on its own.
@@ -29,7 +29,7 @@ NUITKA_MAY_BE_UNUSED static PyObject *LOOKUP_BUILTIN( PyObject *name )
 {
     CHECK_OBJECT( (PyObject *)dict_builtin );
     CHECK_OBJECT( name );
-    assert( Nuitka_String_Check( name ) );
+    assert( Nuitka_String_CheckExact( name ) );
 
     PyObject *result = GET_STRING_DICT_VALUE(
         dict_builtin,

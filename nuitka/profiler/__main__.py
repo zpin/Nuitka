@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -27,7 +27,7 @@ import runpy
 import sys
 import tempfile
 
-import vmprof  # pylint: disable=F0401,I0021
+import vmprof  # @UnresolvedImport pylint: disable=F0401,I0021
 
 
 def _namelen(e):

@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -36,14 +36,27 @@ class Variable:
         self.variable_name = variable_name
         self.owner = owner
 
-        self.read_only_indicator = None
-
         self.version_number = 0
+
+        self.global_trace = None
 
     __del__ = InstanceCounters.counted_del()
 
     def getName(self):
         return self.variable_name
+
+    def getOwner(self):
+        return self.owner
+
+    def getGlobalVariableTrace(self):
+        # Monkey patched later to then use it, pylint: disable=R0201
+        return None
+
+    def _getGlobalVariableTrace(self):
+        return self.global_trace
+
+    def setGlobalVariableTrace(self, global_trace):
+        self.global_trace = global_trace
 
     def getCodeName(self):
         var_name = self.variable_name
@@ -51,17 +64,6 @@ class Variable:
         var_name = Utils.encodeNonAscii(var_name)
 
         return var_name
-
-    def getOwner(self):
-        return self.owner
-
-    def getReadOnlyIndicator(self):
-        return self.read_only_indicator
-
-    def setReadOnlyIndicator(self, value):
-        assert value in (True, False)
-
-        self.read_only_indicator = value
 
     def allocateTargetNumber(self):
         self.version_number += 1
@@ -78,9 +80,6 @@ class Variable:
     def isParameterVariable(self):
         return False
 
-    def isNestedParameterVariable(self):
-        return False
-
     def isModuleVariable(self):
         return False
 
@@ -88,17 +87,9 @@ class Variable:
         return False
     # pylint: enable=R0201
 
-    def isSharedLogically(self):
-        from nuitka.VariableRegistry import isSharedLogically
-        return isSharedLogically(self)
-
     def isSharedTechnically(self):
         from nuitka.VariableRegistry import isSharedTechnically
         return isSharedTechnically(self)
-
-    def getDeclarationTypeCode(self):
-        # Abstract method, pylint: disable=R0201
-        assert False
 
 
 class LocalVariable(Variable):
@@ -118,12 +109,6 @@ class LocalVariable(Variable):
 
     def isLocalVariable(self):
         return True
-
-    def getDeclarationTypeCode(self):
-        if self.isSharedTechnically():
-            return "PyCellObject *"
-        else:
-            return "PyObject *"
 
 
 class MaybeLocalVariable(Variable):
@@ -152,53 +137,21 @@ class MaybeLocalVariable(Variable):
 
 
 class ParameterVariable(LocalVariable):
-    def __init__(self, owner, parameter_name, kw_only):
+    def __init__(self, owner, parameter_name):
         LocalVariable.__init__(
             self,
             owner         = owner,
             variable_name = parameter_name
         )
 
-        self.kw_only = kw_only
-
     def isParameterVariable(self):
         return True
-
-    def isParameterVariableKwOnly(self):
-        return self.kw_only
-
-
-class NestedParameterVariable(ParameterVariable):
-    def __init__(self, owner, parameter_name, parameter_spec):
-        ParameterVariable.__init__(
-            self,
-            owner          = owner,
-            parameter_name = parameter_name,
-            kw_only        = False
-        )
-
-        self.parameter_spec = parameter_spec
-
-    def isNestedParameterVariable(self):
-        return True
-
-    def getVariables(self):
-        return self.parameter_spec.getVariables()
-
-    def getAllVariables(self):
-        return self.parameter_spec.getAllVariables()
-
-    def getTopLevelVariables(self):
-        return self.parameter_spec.getTopLevelVariables()
-
-    def getParameterNames(self):
-        return self.parameter_spec.getParameterNames()
 
 
 class ModuleVariable(Variable):
     def __init__(self, module, variable_name):
         assert type(variable_name) is str, repr(variable_name)
-        assert module.isPythonModule()
+        assert module.isCompiledPythonModule()
 
         Variable.__init__(
             self,
@@ -211,7 +164,7 @@ class ModuleVariable(Variable):
     def __repr__(self):
         return "<ModuleVariable '%s' of '%s'>" % (
             self.variable_name,
-            self.getModuleName()
+            self.getModule().getFullName()
         )
 
     def isModuleVariable(self):
@@ -219,9 +172,6 @@ class ModuleVariable(Variable):
 
     def getModule(self):
         return self.module
-
-    def getModuleName(self):
-        return self.module.getFullName()
 
 
 class TempVariable(Variable):
@@ -240,21 +190,3 @@ class TempVariable(Variable):
 
     def isTempVariable(self):
         return True
-
-    def getDeclarationTypeCode(self):
-        if self.isSharedTechnically():
-            return "PyCellObject *"
-        else:
-            return "PyObject *"
-
-    def getDeclarationInitValueCode(self):
-        # Virtual method, pylint: disable=R0201
-        return "NULL"
-
-
-def getNames(variables):
-    return [
-        variable.getName()
-        for variable in
-        variables
-    ]

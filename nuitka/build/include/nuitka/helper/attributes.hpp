@@ -1,4 +1,4 @@
-//     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+//     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 //
 //     Part of "Nuitka", an optimizing Python compiler that is compatible and
 //     integrates with CPython, but also works on its own.
@@ -25,7 +25,7 @@ NUITKA_MAY_BE_UNUSED static PyObject *FIND_ATTRIBUTE_IN_CLASS( PyClassObject *kl
     CHECK_OBJECT( attr_name );
 
     assert( PyClass_Check( klass ));
-    assert( PyString_Check( attr_name ) );
+    assert( PyString_CheckExact( attr_name ) );
 
     PyObject *result = GET_STRING_DICT_VALUE( (PyDictObject *)klass->cl_dict, (PyStringObject *)attr_name );
 
@@ -49,7 +49,7 @@ NUITKA_MAY_BE_UNUSED static PyObject *FIND_ATTRIBUTE_IN_CLASS( PyClassObject *kl
 #endif
 
 #if PYTHON_VERSION < 300
-extern PyObject *CALL_FUNCTION_WITH_ARGS2( PyObject *called, PyObject *arg1, PyObject *arg2 );
+extern PyObject *CALL_FUNCTION_WITH_ARGS2( PyObject *called, PyObject **args );
 
 
 static PyObject *LOOKUP_INSTANCE( PyObject *source, PyObject *attr_name )
@@ -58,7 +58,7 @@ static PyObject *LOOKUP_INSTANCE( PyObject *source, PyObject *attr_name )
     CHECK_OBJECT( attr_name );
 
     assert( PyInstance_Check( source ) );
-    assert( PyString_Check( attr_name ) );
+    assert( PyString_CheckExact( attr_name ) );
 
     PyInstanceObject *source_instance = (PyInstanceObject *)source;
 
@@ -122,10 +122,13 @@ static PyObject *LOOKUP_INSTANCE( PyObject *source, PyObject *attr_name )
     }
     else
     {
-        return CALL_FUNCTION_WITH_ARGS2(
-            source_instance->in_class->cl_getattr,
+        PyObject *args[] = {
             source,
             attr_name
+        };
+        return CALL_FUNCTION_WITH_ARGS2(
+            source_instance->in_class->cl_getattr,
+            args
         );
     }
 }
@@ -284,7 +287,7 @@ NUITKA_MAY_BE_UNUSED static PyObject *BUILTIN_HASATTR( PyObject *source, PyObjec
 }
 
 #if PYTHON_VERSION < 300
-extern PyObject *CALL_FUNCTION_WITH_ARGS3( PyObject *called, PyObject *arg1, PyObject *arg2, PyObject *arg3 );
+extern PyObject *CALL_FUNCTION_WITH_ARGS3( PyObject *called, PyObject **args );
 
 static bool SET_INSTANCE( PyObject *target, PyObject *attr_name, PyObject *value )
 {
@@ -305,9 +308,10 @@ static bool SET_INSTANCE( PyObject *target, PyObject *attr_name, PyObject *value
 
     if ( target_instance->in_class->cl_setattr != NULL )
     {
+        PyObject *args[] = { target, attr_name, value };
         PyObject *result = CALL_FUNCTION_WITH_ARGS3(
             target_instance->in_class->cl_setattr,
-            target, attr_name, value
+            args
         );
 
         if (unlikely( result == NULL ))
@@ -408,6 +412,7 @@ NUITKA_MAY_BE_UNUSED static bool SET_ATTRIBUTE_DICT_SLOT( PyObject *target, PyOb
     {
         PyInstanceObject *target_instance = (PyInstanceObject *)target;
 
+        /* Note seems this doesn't have to be an exact dictionary. */
         if (unlikely( !PyDict_Check( value ) ))
         {
             PyErr_SetString( PyExc_TypeError, "__dict__ must be set to a dictionary" );

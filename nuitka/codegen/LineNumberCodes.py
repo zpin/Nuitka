@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -45,6 +45,7 @@ def getLineNumberUpdateCode(context):
     else:
         return ""
 
+
 def getErrorLineNumberUpdateCode(context):
     lineno_value = getCurrentLineNumberCode(context)
 
@@ -56,7 +57,14 @@ def getErrorLineNumberUpdateCode(context):
         return ""
 
 
-def emitLineNumberUpdateCode(context, emit):
+def emitErrorLineNumberUpdateCode(emit, context):
+    update_code = getErrorLineNumberUpdateCode(context)
+
+    if update_code:
+        emit(update_code)
+
+
+def emitLineNumberUpdateCode(emit, context):
     code = getLineNumberUpdateCode(context)
 
     if code:

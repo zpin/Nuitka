@@ -1,4 +1,4 @@
-//     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+//     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 //
 //     Part of "Nuitka", an optimizing Python compiler that is compatible and
 //     integrates with CPython, but also works on its own.
@@ -17,6 +17,14 @@
 //
 #ifndef __NUITKA_DICTIONARIES_H__
 #define __NUITKA_DICTIONARIES_H__
+
+
+static inline Py_ssize_t DICT_SIZE( PyObject *dict )
+{
+    CHECK_OBJECT( dict );
+
+    return ((PyDictObject *)dict)->ma_used;
+}
 
 static inline PyDictObject *MODULE_DICT( PyModuleObject *module )
 {
@@ -38,7 +46,7 @@ typedef PyDictEntry *Nuitka_DictEntryHandle;
 static PyDictEntry *GET_STRING_DICT_ENTRY( PyDictObject *dict, Nuitka_StringObject *key )
 {
     assert( PyDict_CheckExact( dict ) );
-    assert( Nuitka_String_Check( key ) );
+    assert( Nuitka_String_CheckExact( key ) );
 
 #if PYTHON_VERSION < 300
     Py_hash_t hash = key->ob_shash;
@@ -114,7 +122,7 @@ typedef PyObject **Nuitka_DictEntryHandle;
 static Nuitka_DictEntryHandle GET_STRING_DICT_ENTRY( PyDictObject *dict, Nuitka_StringObject *key )
 {
     assert( PyDict_CheckExact( dict ) );
-    assert( Nuitka_String_Check( key ) );
+    assert( Nuitka_String_CheckExact( key ) );
 
     Py_hash_t hash = key->_base._base.hash;
 
@@ -193,7 +201,7 @@ NUITKA_MAY_BE_UNUSED static bool DICT_REMOVE_ITEM( PyObject *dict, PyObject *key
 NUITKA_MAY_BE_UNUSED static PyObject *DICT_GET_ITEM( PyObject *dict, PyObject *key )
 {
     CHECK_OBJECT( dict );
-    assert( PyDict_Check( dict ) );
+    assert( PyDict_CheckExact( dict ) );
 
     CHECK_OBJECT( key );
 
@@ -206,7 +214,20 @@ NUITKA_MAY_BE_UNUSED static PyObject *DICT_GET_ITEM( PyObject *dict, PyObject *k
             return NULL;
         }
 
-        PyErr_SetObject( PyExc_KeyError, key );
+        /* Wrap all kinds of tuples, because normalization will later unwrap
+         * it, but then that changes the key for the KeyError, which is not
+         * welcome. The check is inexact, as the unwrapping one is too.
+         */
+        if ( PyTuple_Check( key ) )
+        {
+            PyObject *tuple = PyTuple_Pack( 1, key );
+            PyErr_SetObject( PyExc_KeyError, tuple );
+            Py_DECREF( tuple );
+        }
+        else
+        {
+            PyErr_SetObject( PyExc_KeyError, key );
+        }
         return NULL;
     }
     else
@@ -216,7 +237,7 @@ NUITKA_MAY_BE_UNUSED static PyObject *DICT_GET_ITEM( PyObject *dict, PyObject *k
 }
 
 
-// Convert to dictionary, helper for builtin dict mainly.
+// Convert to dictionary, helper for built-in "dict" mainly.
 NUITKA_MAY_BE_UNUSED static PyObject *TO_DICT( PyObject *seq_obj, PyObject *dict_obj )
 {
     PyObject *result = PyDict_New();
@@ -299,5 +320,63 @@ NUITKA_MAY_BE_UNUSED static void UPDATE_STRING_DICT1( PyDictObject *dict, Nuitka
     }
 }
 
+// TODO: Have mapping.hpp
+NUITKA_MAY_BE_UNUSED static void DICT_SYNC_FROM_VARIABLE( PyObject *dict, PyObject *key, PyObject *value )
+{
+    if ( value )
+    {
+        assert( PyDict_CheckExact( dict ) );
+        UPDATE_STRING_DICT0( (PyDictObject *)dict, (Nuitka_StringObject *)key, value );
+    }
+    else
+    {
+        int res = PyDict_DelItem( dict, key );
+
+        if ( res != 0 )
+        {
+            CLEAR_ERROR_OCCURRED();
+        }
+    }
+}
+
+// TODO: Have mapping.hpp
+NUITKA_MAY_BE_UNUSED static bool MAPPING_SYNC_FROM_VARIABLE( PyObject *mapping, PyObject *key, PyObject *value )
+{
+    if ( value )
+    {
+        int res = PyObject_SetItem(
+            mapping,
+            key,
+            value
+        );
+
+        return res == 0;
+    }
+    else
+    {
+        PyObject *test_value = PyObject_GetItem(
+            mapping,
+            key
+        );
+
+        if ( test_value )
+        {
+            Py_DECREF( test_value );
+
+            int res = PyObject_DelItem(
+                mapping,
+                key
+            );
+
+            return res == 0;
+        }
+        else
+        {
+            PyErr_Clear();
+            return true;
+        }
+    }
+
+}
 
 #endif

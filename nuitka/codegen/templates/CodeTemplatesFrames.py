@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -117,7 +117,7 @@ goto %(parent_exception_exit)s;
 # TODO: The once guard need not take a reference count in its frame class.
 template_frame_guard_once = """\
 // Frame without reuse.
-%(frame_identifier)s = MAKE_FRAME( %(code_identifier)s, %(module_identifier)s );
+%(frame_identifier)s = MAKE_MODULE_FRAME( %(code_identifier)s, %(module_identifier)s );
 
 // Push the new frame as the currently active one, and we should be exclusively
 // owning it.
@@ -188,6 +188,7 @@ if ( generator->m_exception_type )
 
     if (exception_tb == NULL)
     {
+        %(set_error_line_number)s
         goto %(frame_exception_exit)s;
     }
     else
@@ -199,13 +200,12 @@ if ( generator->m_exception_type )
 
 # Frame in a generator
 template_frame_guard_generator = """\
-MAKE_OR_REUSE_FRAME( cache_%(frame_identifier)s, %(code_identifier)s, %(module_identifier)s );
-%(frame_identifier)s = cache_%(frame_identifier)s;
+MAKE_OR_REUSE_FRAME( %(frame_cache_identifier)s, %(code_identifier)s, %(module_identifier)s );
+generator->m_frame = %(frame_cache_identifier)s;
+Py_INCREF( generator->m_frame );
 
-Py_INCREF( %(frame_identifier)s );
-generator->m_frame = %(frame_identifier)s;
 #if PYTHON_VERSION >= 340
-%(frame_identifier)s->f_gen = (PyObject *)generator;
+generator->m_frame->f_gen = (PyObject *)generator;
 #endif
 
 Py_CLEAR( generator->m_frame->f_back );
@@ -217,7 +217,7 @@ PyThreadState_GET()->frame = generator->m_frame;
 Py_INCREF( generator->m_frame );
 
 #if PYTHON_VERSION >= 340
-%(frame_identifier)s->f_executing += 1;
+generator->m_frame->f_executing += 1;
 #endif
 
 #if PYTHON_VERSION >= 300
@@ -226,31 +226,76 @@ Py_INCREF( generator->m_frame );
 
 PyThreadState *thread_state = PyThreadState_GET();
 
-%(frame_identifier)s->f_exc_type = thread_state->exc_type;
-if ( %(frame_identifier)s->f_exc_type == Py_None ) %(frame_identifier)s->f_exc_type = NULL;
-Py_XINCREF( %(frame_identifier)s->f_exc_type );
-%(frame_identifier)s->f_exc_value = thread_state->exc_value;
-Py_XINCREF( %(frame_identifier)s->f_exc_value );
-%(frame_identifier)s->f_exc_traceback = thread_state->exc_traceback;
-Py_XINCREF( %(frame_identifier)s->f_exc_traceback );
+generator->m_frame->f_exc_type = thread_state->exc_type;
+if ( generator->m_frame->f_exc_type == Py_None ) generator->m_frame->f_exc_type = NULL;
+Py_XINCREF( generator->m_frame->f_exc_type );
+generator->m_frame->f_exc_value = thread_state->exc_value;
+Py_XINCREF( generator->m_frame->f_exc_value );
+generator->m_frame->f_exc_traceback = thread_state->exc_traceback;
+Py_XINCREF( generator->m_frame->f_exc_traceback );
 #endif
 
 // Framed code:
 %(codes)s
 
 #if PYTHON_VERSION >= 340
-%(frame_identifier)s->f_executing -= 1;
+generator->m_frame->f_executing -= 1;
 #endif
 
 #if PYTHON_VERSION >= 300
-Py_CLEAR( %(frame_identifier)s->f_exc_type );
-Py_CLEAR( %(frame_identifier)s->f_exc_value );
-Py_CLEAR( %(frame_identifier)s->f_exc_traceback );
+Py_CLEAR( generator->m_frame->f_exc_type );
+Py_CLEAR( generator->m_frame->f_exc_value );
+Py_CLEAR( generator->m_frame->f_exc_traceback );
 #endif
 
-Py_DECREF( %(frame_identifier)s );
+Py_DECREF( generator->m_frame );
 goto %(no_exception_exit)s;
 """
+
+# Frame in a coroutine
+template_frame_guard_coroutine = """\
+MAKE_OR_REUSE_FRAME( %(frame_cache_identifier)s, %(code_identifier)s, %(module_identifier)s );
+coroutine->m_frame = %(frame_cache_identifier)s;
+Py_INCREF( coroutine->m_frame );
+
+coroutine->m_frame->f_gen = (PyObject *)coroutine;
+
+Py_CLEAR( coroutine->m_frame->f_back );
+
+coroutine->m_frame->f_back = PyThreadState_GET()->frame;
+Py_INCREF( coroutine->m_frame->f_back );
+
+PyThreadState_GET()->frame = coroutine->m_frame;
+Py_INCREF( coroutine->m_frame );
+
+coroutine->m_frame->f_executing += 1;
+
+// Accept currently existing exception as the one to publish again when we
+// yield or yield from.
+
+PyThreadState *thread_state = PyThreadState_GET();
+
+coroutine->m_frame->f_exc_type = thread_state->exc_type;
+if ( coroutine->m_frame->f_exc_type == Py_None ) coroutine->m_frame->f_exc_type = NULL;
+Py_XINCREF( coroutine->m_frame->f_exc_type );
+coroutine->m_frame->f_exc_value = thread_state->exc_value;
+Py_XINCREF( coroutine->m_frame->f_exc_value );
+coroutine->m_frame->f_exc_traceback = thread_state->exc_traceback;
+Py_XINCREF( coroutine->m_frame->f_exc_traceback );
+
+// Framed code:
+%(codes)s
+
+coroutine->m_frame->f_executing -= 1;
+
+Py_CLEAR( coroutine->m_frame->f_exc_type );
+Py_CLEAR( coroutine->m_frame->f_exc_value );
+Py_CLEAR( coroutine->m_frame->f_exc_traceback );
+
+Py_DECREF( coroutine->m_frame );
+goto %(no_exception_exit)s;
+"""
+
 
 # TODO: This cannot happen, can it?
 template_frame_guard_generator_return_handler = """\

@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -19,7 +19,7 @@
 
 from __future__ import print_function
 
-import os, sys, subprocess, tempfile, atexit, shutil, re
+import os, sys, subprocess, tempfile, atexit, shutil, re, ast
 
 # Make sure we flush after every print, the "-u" option does more than that
 # and this is easy enough.
@@ -168,10 +168,12 @@ def convertUsing2to3(path, force = False):
         path
     ]
 
-    if not force and "xrange" not in open(path).read():
-        with open(os.devnull, 'w') as stderr:
-            if check_result(command, stderr = stderr):
-                return path, False
+    if not force:
+        with open(path) as source_file:
+            if "xrange" not in source_file.read():
+                with open(os.devnull, 'w') as stderr:
+                    if check_result(command, stderr = stderr):
+                        return path, False
 
     filename = os.path.basename(path)
 
@@ -233,6 +235,10 @@ def decideFilenameVersionSkip(filename):
 
     # Skip tests that require Python 3.4 at least.
     if filename.endswith("34.py") and python_version < "3.4":
+        return False
+
+    # Skip tests that require Python 3.5 at least.
+    if filename.endswith("35.py") and python_version < "3.5":
         return False
 
     return True
@@ -345,23 +351,56 @@ def getDependsExePath():
 
     return depends_exe
 
+def isExecutableCommand(command):
+    path = os.environ["PATH"]
 
-def getRuntimeTraceOfLoadedFiles(path,trace_error = True):
+    suffixes = (".exe",) if os.name == "nt" else ("",)
+
+    for part in path.split(os.pathsep):
+        if not part:
+            continue
+
+        for suffix in suffixes:
+            if os.path.isfile(os.path.join(part, command + suffix)):
+                return True
+
+    return False
+
+
+def getRuntimeTraceOfLoadedFiles(path, trace_error = True):
     """ Returns the files loaded when executing a binary. """
 
     result = []
 
     if os.name == "posix":
-        if sys.platform == "darwin":
+        if sys.platform == "darwin" or \
+           sys.platform.startswith("freebsd"):
+            if not isExecutableCommand("dtruss"):
+                sys.exit(
+                    """\
+Error, needs 'dtruss' on your system to scan used libraries."""
+                )
+
+            if not isExecutableCommand("sudo"):
+                sys.exit(
+                    """\
+Error, needs 'sudo' on your system to scan used libraries."""
+                )
+
             args = (
                 "sudo",
                 "dtruss",
-                "-f",
                 "-t",
                 "open",
                 path
             )
         else:
+            if not isExecutableCommand("strace"):
+                sys.exit(
+                    """\
+Error, needs 'strace' on your system to scan used libraries."""
+                )
+
             args = (
                 "strace",
                 "-e", "file",
@@ -375,7 +414,7 @@ def getRuntimeTraceOfLoadedFiles(path,trace_error = True):
             stderr = subprocess.PIPE
         )
 
-        stdout_strace, stderr_strace = process.communicate()
+        _stdout_strace, stderr_strace = process.communicate()
 
         open(path+".strace","wb").write(stderr_strace)
 
@@ -526,7 +565,7 @@ def checkReferenceCount(checked_function, max_rounds = 10):
     assert max_rounds > 0
     for count in range(max_rounds):
         gc.collect()
-        ref_count1 = sys.gettotalrefcount()
+        ref_count1 = sys.gettotalrefcount()  # @UndefinedVariable
 
         if explain and count == max_rounds - 1:
             snapObjRefCntMap(True)
@@ -541,7 +580,7 @@ def checkReferenceCount(checked_function, max_rounds = 10):
         if explain and count == max_rounds - 1:
             snapObjRefCntMap(False)
 
-        ref_count2 = sys.gettotalrefcount()
+        ref_count2 = sys.gettotalrefcount()  # @UndefinedVariable
 
         if ref_count1 == ref_count2:
             result = True
@@ -617,8 +656,10 @@ def createSearchMode():
                 dirname,
                 filename,
                 filename.replace(".py", ""),
+                filename.split(".")[0],
                 path,
-                path.replace(".py", "")
+                path.replace(".py", ""),
+
             )
 
         def isCoverage(self):
@@ -756,3 +797,167 @@ def withExtendedExtraOptions(*args):
     else:
         os.environ[ "NUITKA_EXTRA_OPTIONS" ] = old_value
 
+
+def indentedCode(codes, count):
+    """ Indent code, used for generating test codes.
+
+    """
+    return '\n'.join( ' ' * count + line if line else "" for line in codes )
+
+
+def convertToPython(doctests, line_filter = None):
+    """ Convert give doctest string to static Python code.
+
+    """
+    import doctest
+    code = doctest.script_from_examples(doctests)
+
+    if code.endswith('\n'):
+        code += "#\n"
+    else:
+        assert False
+
+    output = []
+    inside = False
+
+    def getPrintPrefixed(evaluated):
+        try:
+            node = ast.parse(evaluated.lstrip(), "eval")
+        except SyntaxError:
+            return evaluated
+
+        if node.body[0].__class__.__name__ == "Expr":
+            count = 0
+
+            while evaluated.startswith(' ' * count):
+                count += 1
+
+            if sys.version_info < (3,):
+                modified = (count-1) * ' ' + "print " + evaluated
+                return (count-1) * ' ' + ("print 'Line %d'" % line_number) + "\n" + modified
+            else:
+                modified = (count-1) * ' ' + "print(" + evaluated + "\n)\n"
+                return (count-1) * ' ' + ("print('Line %d'" % line_number) + ")\n" + modified
+        else:
+            return evaluated
+
+    def getTried(evaluated):
+        if sys.version_info < (3,):
+            return """
+try:
+%(evaluated)s
+except Exception as __e:
+    print "Occurred", type(__e), __e
+""" % { "evaluated" : indentedCode(getPrintPrefixed(evaluated).split('\n'), 4) }
+        else:
+            return """
+try:
+%(evaluated)s
+except Exception as __e:
+    print("Occurred", type(__e), __e)
+""" % { "evaluated" : indentedCode(getPrintPrefixed(evaluated).split('\n'), 4) }
+
+    def isOpener(evaluated):
+        evaluated = evaluated.lstrip()
+
+        if evaluated == "":
+            return False
+
+        if evaluated.split()[0] in ("def", "class", "for", "while", "try:", "except", "except:", "finally:", "else:"):
+            return True
+        else:
+            return False
+
+    for line_number, line in enumerate(code.split('\n')):
+        # print "->", inside, line
+
+        if line_filter is not None and line_filter(line):
+            continue
+
+        if inside and len(line) > 0 and line[0].isalnum() and not isOpener(line):
+            output.append(getTried('\n'.join(chunk)))  # @UndefinedVariable
+
+            chunk = []
+            inside = False
+
+        if inside and not (line.startswith('#') and line.find("SyntaxError:") != -1):
+            chunk.append(line)
+        elif line.startswith('#'):
+            if line.find("SyntaxError:") != -1:
+                # print "Syntax error detected"
+
+                if inside:
+                    # print "Dropping chunk", chunk
+
+                    chunk = []
+                    inside = False
+                else:
+                    del output[-1]
+        elif isOpener(line):
+            inside = True
+            chunk = [line]
+        elif line.strip() == "":
+            output.append(line)
+        else:
+            output.append(getTried(line))
+
+    return '\n'.join(output).rstrip() + '\n'
+
+
+def compileLibraryPath(search_mode, path, stage_dir, decide, action):
+    my_print("Checking standard library path:", path)
+    global active
+
+    for root, dirnames, filenames in os.walk(path):
+        dirnames_to_remove = [
+            dirname
+            for dirname in dirnames
+            if "-" in dirname
+        ]
+
+        for dirname in dirnames_to_remove:
+            dirnames.remove(dirname)
+
+        dirnames.sort()
+
+        filenames = [
+            filename
+            for filename in filenames
+            if decide(root, filename)
+        ]
+
+        for filename in sorted(filenames):
+            if not search_mode.consider(root, filename):
+                continue
+
+            full_path = os.path.join(root, filename)
+
+            my_print(full_path, ':', end = ' ')
+            sys.stdout.flush()
+
+            action(stage_dir, path, full_path)
+
+
+def compileLibraryTest(search_mode, stage_dir, decide, action):
+    my_dirname = os.path.dirname(__file__)
+
+    paths = [
+        path
+        for path in
+        sys.path
+        if not path.startswith(my_dirname)
+    ]
+
+    my_print("Using standard library paths:")
+    for path in paths:
+        my_print(path)
+
+
+    for path in paths:
+        compileLibraryPath(
+            search_mode = search_mode,
+            path        = path,
+            stage_dir   = stage_dir,
+            decide      = decide,
+            action      = action
+        )

@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -41,7 +41,8 @@ from logging import warning
 
 from nuitka import Options
 from nuitka.containers import oset
-from nuitka.plugins.PluginBase import Plugins
+from nuitka.plugins.Plugins import Plugins
+from nuitka.PythonVersions import python_version
 from nuitka.utils import Utils
 
 from .PreloadedPackages import getPreloadedPackagePath, isPreloadedPackagePath
@@ -75,7 +76,7 @@ def isPackageDir(dirname):
 
     return Utils.isDir(dirname) and \
            (
-               Utils.python_version >= 330 or
+               python_version >= 330 or
                Utils.isFile(Utils.joinpath(dirname, "__init__.py")) or
                isPreloadedPackagePath(dirname)
            )
@@ -117,7 +118,7 @@ def getModuleNameAndKindFromFilename(module_filename):
     return module_name, module_kind
 
 
-def warnAbout(importing, module_name, parent_package, level, source_ref):
+def warnAbout(importing, module_name, parent_package, level):
     # This probably should not be dealt with here.
     if module_name == "":
         return
@@ -133,7 +134,7 @@ def warnAbout(importing, module_name, parent_package, level, source_ref):
             else:
                 full_name = module_name
 
-            if Plugins.suppressUnknownImportWarning(importing, full_name, source_ref):
+            if Plugins.suppressUnknownImportWarning(importing, full_name):
                 return
 
             if level == 0:
@@ -148,7 +149,7 @@ def warnAbout(importing, module_name, parent_package, level, source_ref):
             if parent_package is not None:
                 warning(
                     "%s: Cannot find '%s' in package '%s' %s.",
-                    source_ref.getAsString(),
+                    importing.getSourceReference().getAsString(),
                     module_name,
                     parent_package,
                     level_desc
@@ -156,7 +157,7 @@ def warnAbout(importing, module_name, parent_package, level, source_ref):
             else:
                 warning(
                     "%s: Cannot find '%s' %s.",
-                    source_ref.getAsString(),
+                    importing.getSourceReference().getAsString(),
                     module_name,
                     level_desc
                 )
@@ -171,7 +172,7 @@ def normalizePackageName(module_name):
     return module_name
 
 
-def findModule(importing, source_ref, module_name, parent_package, level, warn):
+def findModule(importing, module_name, parent_package, level, warn):
     """ Find a module with given package name as parent.
 
         The package name can be None of course. Level is the same
@@ -277,7 +278,6 @@ def findModule(importing, source_ref, module_name, parent_package, level, warn):
             module_name    = module_name,
             parent_package = parent_package,
             level          = level,
-            source_ref     = source_ref
         )
 
     return None, None, "not-found"
@@ -325,7 +325,7 @@ def _findModuleInPath2(module_name, search_path):
                     )
                     break
             else:
-                if Utils.python_version >= 330:
+                if python_version >= 330:
                     candidates.add(
                         (entry, 2, package_directory)
                     )
@@ -377,16 +377,20 @@ def getPackageSearchPath(package_name):
     if package_name is None:
         return [os.getcwd(), main_path] + sys.path
     elif '.' in package_name:
-        parent_package_name, package_name = package_name.rsplit('.', 1)
+        parent_package_name, child_package_name = package_name.rsplit('.', 1)
 
         result = []
         for element in getPackageSearchPath(parent_package_name):
             package_dir = Utils.joinpath(
                 element,
-                package_name
+                child_package_name
             )
 
             if isPackageDir(package_dir):
+                result.append(package_dir)
+                # Hack for "uniconverter". TODO: Move this to plug-in decision. This
+                # fails the above test, but at run time should be a package.
+            elif package_name == "uniconvertor.app.modules":
                 result.append(package_dir)
 
         return result
@@ -400,14 +404,13 @@ def getPackageSearchPath(package_name):
         def getPackageDirCandidates(element):
             yield Utils.joinpath(element, package_name), False
 
-            # Hack for PyWin32. TODO: Move this __path__ extensions to
+            # Hack for PyWin32. TODO: Move this "__path__" extensions to be
             # plug-in decisions.
             if package_name == "win32com":
                 yield Utils.joinpath(element, "win32comext"), True
 
         result = []
         for element in getPackageSearchPath(None):
-
             for package_dir, force_package in getPackageDirCandidates(element):
                 if isPackageDir(package_dir) or force_package:
                     result.append(package_dir)

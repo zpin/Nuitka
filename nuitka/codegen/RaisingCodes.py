@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -15,7 +15,7 @@
 #     See the License for the specific language governing permissions and
 #     limitations under the License.
 #
-""" Code generation for implicit and explict exception raises.
+""" Code generation for implicit and explicit exception raises.
 
 Exceptions from other operations are consider ErrorCodes domain.
 
@@ -23,15 +23,13 @@ Exceptions from other operations are consider ErrorCodes domain.
 
 from nuitka.Options import isDebug
 
-from .Helpers import generateChildExpressionsCode
+from .Helpers import generateChildExpressionsCode, generateExpressionCode
 from .LabelCodes import getGotoCode
-from .LineNumberCodes import getErrorLineNumberUpdateCode
-from .PythonAPICodes import getReferenceExportCode
+from .LineNumberCodes import emitErrorLineNumberUpdateCode
+from .PythonAPICodes import getReferenceExportCode2
 
 
 def generateRaiseCode(statement, emit, context):
-    from .CodeGeneration import generateExpressionCode
-
     exception_type  = statement.getExceptionType()
     exception_value = statement.getExceptionValue()
     exception_tb    = statement.getExceptionTrace()
@@ -251,19 +249,19 @@ def getRaiseExceptionWithCauseCode(raise_type_name, raise_cause_name, emit,
     context.markAsNeedsExceptionVariables()
 
     emit(
-        "exception_type = %s;" % (
-            getReferenceExportCode(raise_type_name, context)
-        )
+        "exception_type = %s;" % raise_type_name
     )
+    getReferenceExportCode2(raise_type_name, emit, context)
 
-    emit(
-        getErrorLineNumberUpdateCode(context)
-    )
+    emit("exception_value = NULL;")
 
+    getReferenceExportCode2(raise_cause_name, emit, context)
+
+    emitErrorLineNumberUpdateCode(emit, context)
     emit(
         """\
 RAISE_EXCEPTION_WITH_CAUSE( &exception_type, &exception_value, &exception_tb, \
-%s );""" % getReferenceExportCode(raise_cause_name, context)
+%s );""" % raise_cause_name
     )
 
     getGotoCode(context.getExceptionEscape(), emit)
@@ -278,15 +276,11 @@ def getRaiseExceptionWithTypeCode(raise_type_name, emit, context):
     context.markAsNeedsExceptionVariables()
 
     emit(
-        "exception_type = %s;" % (
-            getReferenceExportCode(raise_type_name, context)
-        )
+        "exception_type = %s;" % raise_type_name
     )
+    getReferenceExportCode2(raise_type_name, emit, context)
 
-    emit(
-        getErrorLineNumberUpdateCode(context)
-    )
-
+    emitErrorLineNumberUpdateCode(emit, context)
     emit(
         "RAISE_EXCEPTION_WITH_TYPE( &exception_type, &exception_value, &exception_tb );"
     )
@@ -300,20 +294,15 @@ def getRaiseExceptionWithTypeCode(raise_type_name, emit, context):
 def getRaiseExceptionWithValueCode(raise_type_name, raise_value_name, implicit,
                                    emit, context):
     emit(
-        "exception_type = %s;" % (
-            getReferenceExportCode(raise_type_name, context)
-        )
+        "exception_type = %s;" % raise_type_name
     )
+    getReferenceExportCode2(raise_type_name, emit, context)
     emit(
-        "exception_value = %s;" % (
-            getReferenceExportCode(raise_value_name, context)
-        )
+        "exception_value = %s;" % raise_value_name
     )
+    getReferenceExportCode2(raise_value_name, emit, context)
 
-    emit(
-        getErrorLineNumberUpdateCode(context)
-    )
-
+    emitErrorLineNumberUpdateCode(emit, context)
     emit(
         "RAISE_EXCEPTION_%s( &exception_type, &exception_value, &exception_tb );" % (
             ("IMPLICIT" if implicit else "WITH_VALUE")
@@ -331,26 +320,20 @@ def getRaiseExceptionWithValueCode(raise_type_name, raise_value_name, implicit,
 def getRaiseExceptionWithTracebackCode(raise_type_name, raise_value_name,
                                        raise_tb_name, emit, context):
     emit(
-        "exception_type = %s;" % (
-            getReferenceExportCode(raise_type_name, context)
-        )
+        "exception_type = %s;" % raise_type_name
     )
+    getReferenceExportCode2(raise_type_name, emit, context)
     emit(
-        "exception_value = %s;" % (
-            getReferenceExportCode(raise_value_name, context)
-        )
+        "exception_value = %s;" % raise_value_name
     )
+    getReferenceExportCode2(raise_value_name, emit, context)
     emit(
-        "exception_tb = (PyTracebackObject *)%s;" % (
-            getReferenceExportCode(raise_tb_name, context)
-        )
+        "exception_tb = (PyTracebackObject *)%s;" % raise_tb_name
     )
+    getReferenceExportCode2(raise_tb_name, emit, context)
 
-    # TODO: May be wrong.
-    if False:
-        emit(
-            getErrorLineNumberUpdateCode(context)
-        )
+    if False: # TODO: May be wrong, pylint: disable=W0125
+        emitErrorLineNumberUpdateCode(emit, context)
 
     emit(
         "RAISE_EXCEPTION_WITH_TRACEBACK( &exception_type, &exception_value, &exception_tb);"

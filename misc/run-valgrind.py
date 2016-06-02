@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -17,7 +17,12 @@
 #     limitations under the License.
 #
 
-import os, sys, commands, subprocess, shutil, tempfile
+import commands
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
 
 input_file = sys.argv[1]
 nuitka_binary = os.environ.get(
@@ -38,6 +43,10 @@ output_binary = os.path.join(
 )
 
 os.environ[ "PYTHONHASHSEED" ] = '0'
+
+# To make that python run well despite the "-S" flag for things that need site
+# to expand sys.path.
+os.environ["PYTHONPATH"] = os.pathsep.join(sys.path)
 
 os.system(
     "%s --exe --python-flag=-S --output-dir=%s %s %s %s" % (

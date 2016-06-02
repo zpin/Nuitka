@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -51,14 +51,19 @@ if unicode is str:
 else:
     raw_input = raw_input  # @ReservedAssignment
 
-# pylint: disable=E0611
 try:
     from urllib.request import urlretrieve
 except ImportError:
     from urllib import urlretrieve
-# pylint: enable=E0611
+
+
+try:
+    from cStringIO import StringIO
+except ImportError:
+    from io import StringIO
 
 # For PyLint to be happy.
 assert long
 assert unicode
 assert urlretrieve
+assert StringIO

@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -17,8 +17,9 @@
 #     limitations under the License.
 #
 
-import os, shutil, subprocess
-
+import os
+import shutil
+import subprocess
 from optparse import OptionParser
 
 parser = OptionParser()
@@ -52,6 +53,9 @@ assert branch_name in (
     b"release/" + nuitka_version,
     b"hotfix/" + nuitka_version
 ), branch_name
+
+if str is not bytes:
+    branch_name = branch_name.decode()
 
 def checkChangeLog(message):
     for line in open("debian/changelog"):
@@ -124,7 +128,7 @@ for filename in os.listdir('.'):
         # Fixup for py2dsc not taking our custom suffix into account, so we need
         # to rename it ourselves.
         before_deb_name = filename[:-7].lower().replace('-', '_')
-        after_deb_name = before_deb_name.replace("pre", "~pre")
+        after_deb_name = before_deb_name.replace("rc", "~rc")
 
         assert 0 == os.system(
             "mv 'deb_dist/%s.orig.tar.gz' 'deb_dist/%s+ds.orig.tar.gz'" % (
@@ -175,11 +179,15 @@ assert 0 == os.system(
 os.chdir("../../..")
 assert os.path.exists("dist/deb_dist")
 
-# Check with pylint in pedantic mode and don't procede if there were any
-# warnings given. Nuitka is lintian clean and shall remain that way.
-assert 0 == os.system(
-    "lintian --pedantic --fail-on-warnings --allow-root dist/deb_dist/*.changes"
-)
+# Check with pylint in pedantic mode and don't proceed if there were any
+# warnings given. Nuitka is lintian clean and shall remain that way. For
+# hotfix releases, i.e. "master" builds, we skip this test though.
+if branch_name != "master":
+    assert 0 == os.system(
+        "lintian --pedantic --fail-on-warnings --allow-root dist/deb_dist/*.changes"
+    )
+else:
+    print("Skipped lintian checks for stable releases.")
 
 os.system("cp dist/deb_dist/*.deb dist/")
 

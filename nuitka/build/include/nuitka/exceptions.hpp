@@ -1,4 +1,4 @@
-//     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+//     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 //
 //     Part of "Nuitka", an optimizing Python compiler that is compatible and
 //     integrates with CPython, but also works on its own.
@@ -28,7 +28,7 @@ NUITKA_MAY_BE_UNUSED static inline bool ERROR_OCCURRED( void )
     return tstate->curexc_type != NULL;
 }
 
-// Get the error occurred.
+// Get the error type occurred.
 NUITKA_MAY_BE_UNUSED static inline PyObject *GET_ERROR_OCCURRED( void )
 {
     PyThreadState *tstate = PyThreadState_GET();
@@ -435,6 +435,8 @@ NUITKA_MAY_BE_UNUSED static inline int EXCEPTION_MATCH_BOOL( PyObject *exception
     CHECK_OBJECT( exception_checked );
 
 #if PYTHON_VERSION >= 300
+    /* Note: Exact matching tuples seems to needed, despite using GET_ITEM later
+       on, this probably cannot be overloaded that deep. */
     if ( PyTuple_Check( exception_checked ))
     {
         Py_ssize_t length = PyTuple_Size( exception_checked );

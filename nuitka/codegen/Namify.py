@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -130,7 +130,7 @@ def namifyConstant(constant):
 
                 return "tuple_" + result + "_tuple"
             except ExceptionCannotNamify:
-                warning("Couldn't namify '%r'" % constant)
+                warning("Couldn't namify '%r'" % (constant,))
 
                 return "tuple_" + _digest(repr(constant))
     elif type(constant) is list:
@@ -195,7 +195,7 @@ def _namifyString(string):
         return "angle_" + string[1:-1]
     else:
         # Others are better digested to not cause compiler trouble
-        return "digest_" + _digest(string)
+        return "digest_" + _digest(repr(string))
 
 def _isAscii(string):
     try:
@@ -212,9 +212,4 @@ def _digest(value):
         if type(value) is bytes:
             return hashlib.md5(value).hexdigest()
         else:
-            return hashlib.md5(
-                value.encode(
-                    "utf-8",
-                    errors = "backslashreplace"
-                )
-            ).hexdigest()
+            return hashlib.md5(value.encode("utf-8")).hexdigest()

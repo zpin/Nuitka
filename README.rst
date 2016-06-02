@@ -1,7 +1,7 @@
 Nuitka User Manual
 ~~~~~~~~~~~~~~~~~~
 
-.. image:: images/Nuitka-Logo-Symbol.png
+.. image:: doc/images/Nuitka-Logo-Symbol.png
 
 .. contents::
 
@@ -19,7 +19,7 @@ requirements, credits, etc.
 
 Nuitka is **the** Python compiler. It is a seamless replacement or extension
 to the Python interpreter and compiles **every** construct that CPython 2.6,
-2.7, 3.2, 3.3, and 3.4 have. It then executed uncompiled code, and compiled
+2.7, 3.2, 3.3, 3.4, and 3.5 have. It then executed uncompiled code, and compiled
 code together in an extremely compatible manner.
 
 You can use all Python library modules or and all extension modules freely. It
@@ -45,11 +45,11 @@ Requirements
   * The clang compiler on MacOS X or FreeBSD, based on LLVM version 3.2
     or higher.
 
-  * The MinGW [#]_ or MinGW64 [#]_ compiler on Windows
+  * The MinGW64 [#]_ compiler on Windows.
 
   * Visual Studio 2015 or higher on Windows [#]_
 
-- Python: Version 2.6, 2.7 or 3.2, 3.3, 3.4 (yes, but read below)
+- Python: Version 2.6, 2.7 or 3.2, 3.3, 3.4, 3.5 (yes, but read below)
 
   .. admonition:: Python3, yes but Python2 *compile time* dependency
 
@@ -68,7 +68,7 @@ Requirements
   .. admonition:: Binary filename suffix ".exe" even on Linux
 
      The created binaries have an ".exe" suffix, that you are free to remove
-     and yes, they are still Linux binaries. The suffix is just to be sure
+     that and yes, they are still Linux binaries. The suffix is just to be sure
      that the original script name and the binary name do not collide.
 
   .. admonition:: It has to be CPython, maybe WinPython or AnaConda
@@ -76,10 +76,10 @@ Requirements
      You need the standard Python implementation, called "CPython", to execute
      Nuitka, because it is closely tied to using it.
 
-     On Windows, the so called "WinPython" and "AnaConda" distributions but will
-     cause issues for acceleration mode. Standalone and creating extension
-     modules or packages will also work. For acceleration mode, you need to
-     copy the "PythonXX.DLL" alongside of it.
+     On Windows, the so called "WinPython" and "AnaConda" distributions work,
+     but will cause issues for acceleration mode. Standalone mode and creating
+     extension modules or packages will work. For acceleration mode, you need
+     to copy the "PythonXX.DLL" alongside of it.
 
 - Operating System: Linux, FreeBSD, NetBSD, MacOS X, and Windows (32/64 bits).
 
@@ -97,13 +97,10 @@ Requirements
        C++ compiler you encounter. Nuitka used to have higher requirements in
        the past, but it changed.
 
-.. [#] Download MinGW from http://www.mingw.org/category/wiki/download but
-       beware that 32 bits Python must be used with it, and that it may not
-       work for very large programs. Use MinGW64 and 64 bits Python if you
-       have the choice.
-
-.. [#] Download MinGW64 from here and choose the "win32" and "seh" variant
-       for best results.
+.. [#] Download MinGW64 from here http://mingw-w64.org/ and choose 64 or 32
+       bits matching your Python. Use both MinGW64 and 64 bits Python if you
+       have the choice of which Python to use. Install it to "C:\MinGW64" or
+       "\MinGW64" (same disk root) to find it automatically.
 
 .. [#] Download for free from
        http://www.visualstudio.com/en-us/downloads/download-visual-studio-vs.aspx
@@ -113,7 +110,8 @@ Requirements
 Command Line
 ------------
 
-No environment variable changes are needed, you can call the ``nuitka`` and
+No environment variable changes are needed, most noteworthy, you do not have to
+mess with ``PYTHONPATH`` at all for Nuitka. You just execute the ``nuitka`` and
 ``nuitka-run`` scripts directly without any changes to the environment. You may
 want to add the ``bin`` directory to your ``PATH`` for your convenience, but
 that step is optional.
@@ -249,6 +247,7 @@ Subscribe to its mailing lists
 Please visit the `mailing list page
 <http://www.nuitka.net/pages/mailinglist.html>`__ in order to subscribe the
 relatively low volume mailing list. All Nuitka issues can be discussed there.
+Also this is the place to stay informed of what's coming.
 
 Report issues or bugs
 ---------------------
@@ -284,15 +283,23 @@ Best practices for reporting bugs:
 Contact me via email with your questions
 ----------------------------------------
 
-You are welcome to `contact me via email <mailto:Kay.Hayen@gmail.com>`__ with
-your questions. But it is increasingly true that for user questions the
-mailing list is the best place to go.
+The best place to ask questions is the mailing list. You are welcome to
+`contact me via email <mailto:Kay.Hayen@gmail.com>`__ with your questions. But
+it is increasingly true that for user questions the mailing list is the best
+place to go. Often somebody there knows more about what you are doing.
+
+Follow me on Twitter
+--------------------
+
+Nuitka announcements and interesting stuff is pointed to on the Twitter account,
+but obviously with no details. `@KayHayen <https://twitter.com/KayHayen>`_.
 
 Word of Warning
 ---------------
 
-Consider using this software with caution. Your feedback and patches to Nuitka
-are very welcome.
+Consider using this software with caution. Even though many tests are applied
+before releases, things are potentially breaking. Your feedback and patches to
+Nuitka are very welcome.
 
 Especially report it please, if you find that anything doesn't work, because the
 project is now at the stage that this should not happen and most definitely will
@@ -442,14 +449,14 @@ level read only variables:
    This works for all built-in names. When an assignment is done to such a
    name, or it's even local, then of course it is not done.
 
-Builtin Call Prediction
------------------------
+Built-in Call Prediction
+------------------------
 
-For builtin calls like ``type``, ``len``, or ``range`` it is often possible to
+For built-in calls like ``type``, ``len``, or ``range`` it is often possible to
 predict the result at compile time, esp. for constant inputs the resulting value
 often can be precomputed by Nuitka. It can simply determine the result or the
-raised exception and replace the builtin call with it allowing for more constant
-folding or code path folding.
+raised exception and replace the built-in call with that value, allowing for
+more constant folding or code path reduction.
 
 .. code-block:: python
 
@@ -460,7 +467,7 @@ folding or code path folding.
 
 .. admonition:: Status
 
-   The builtin call prediction is considered implemented. We can simply during
+   The built-in call prediction is considered implemented. We can simply during
    compile time emulate the call and use its result or raised exception. But we
    may not cover all the built-ins there are yet.
 
@@ -534,14 +541,14 @@ The ``(1 / 0)`` can be predicted to raise a ``ZeroDivisionError`` exception,
 which will be propagated through the ``+`` operation. That part is just Constant
 Propagation as normal.
 
-The call to ``side_effect_having`` will have to be retained though, but the
-``print`` statement does and can be turned into an explicit raise. The statement
-sequence can then be aborted and as such the ``something_else`` call needs no
-code generation or consideration anymore.
+The call `side_effect_having()`` will have to be retained though, but the
+``print`` statement does not and can be turned into an explicit raise. The
+statement sequence can then be aborted and as such the ``something_else`` call
+needs no code generation or consideration anymore.
 
-To that end, Nuitka works with a special node that raises an exception and has
-so called "side_effects" children, yet can be used in generated code as an
-expression.
+To that end, Nuitka works with a special node that raises an exception and is
+wrapped with a so called "side_effects" expression, but yet can be used in code
+as an expression having a value.
 
 .. admonition:: Status
 
@@ -587,7 +594,8 @@ without any risk.
 Exception Block Inlining
 ------------------------
 
-With the exception propagation it is then possible to transform this code:
+With the exception propagation it is then becomes possible to transform this
+code:
 
 .. code-block:: python
 
@@ -857,17 +865,16 @@ Projects used by Nuitka
   large variety of platforms and make them available immediately nearly at
   release time.
 
-* The `MinGW project <http://www.mingw.org>`__
+* The `MinGW64 project <http://mingw-w64.org>`__
 
   Thanks for porting the gcc to Windows. This allowed portability of Nuitka with
-  relatively little effort. Unfortunately this is currently limited to compiling
-  CPython with 32 bits, and 64 bits requires MSVC compiler.
+  relatively little effort.
 
 * The `Buildbot project <http://buildbot.net>`__
 
-  Thanks for creating an easy to deploy and use continous integration framework
-  that also runs on Windows and written and configured in Python. This allows to
-  run the Nuitka tests long before release time.
+  Thanks for creating an easy to deploy and use continuous integration framework
+  that also runs on Windows and is written and configured in Python code. This
+  allows to run the Nuitka tests long before release time.
 
 Updates for this Manual
 =======================

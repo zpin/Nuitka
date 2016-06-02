@@ -1,4 +1,4 @@
-#     Copyright 2015, Kay Hayen, mailto:kay.hayen@gmail.com
+#     Copyright 2016, Kay Hayen, mailto:kay.hayen@gmail.com
 #
 #     Part of "Nuitka", an optimizing Python compiler that is compatible and
 #     integrates with CPython, but also works on its own.
@@ -15,35 +15,45 @@
 #     See the License for the specific language governing permissions and
 #     limitations under the License.
 #
-""" Reformulation of yield and yield from expressions.
+""" Reformulation of "yield" and "yield from" expressions.
 
 Consult the developer manual for information. TODO: Add ability to sync
 source code comments with developer manual sections.
 
 """
 
-from nuitka.nodes.BuiltinIteratorNodes import ExpressionBuiltinIter1
+import ast
+
 from nuitka.nodes.ConstantRefNodes import ExpressionConstantRef
 from nuitka.nodes.YieldNodes import ExpressionYield, ExpressionYieldFrom
+from nuitka.PythonVersions import python_version
 from nuitka.tree import SyntaxErrors
-from nuitka.utils import Utils
 
 from .Helpers import buildNode
 
 
-def _markAsGenerator(provider, node, source_ref):
-    if provider.isPythonModule():
+def _checkInsideGenerator(provider, node, source_ref):
+    if provider.isCompiledPythonModule():
         SyntaxErrors.raiseSyntaxError(
             "'yield' outside function",
             source_ref,
-            None if Utils.python_version < 300 else node.col_offset
+            None if python_version < 300 else node.col_offset
         )
 
-    provider.markAsGenerator()
+    if provider.isExpressionCoroutineObjectBody():
+        SyntaxErrors.raiseSyntaxError(
+            "'%s' inside async function" % (
+                "yield" if node.__class__ is ast.Yield else "yield from",
+            ),
+            source_ref,
+            node.col_offset+3
+        )
+
+    assert provider.isExpressionGeneratorObjectBody(), provider
 
 
 def buildYieldNode(provider, node, source_ref):
-    _markAsGenerator(provider, node, source_ref)
+    _checkInsideGenerator(provider, node, source_ref)
 
     if node.value is not None:
         return ExpressionYield(
@@ -62,16 +72,11 @@ def buildYieldNode(provider, node, source_ref):
 
 
 def buildYieldFromNode(provider, node, source_ref):
-    assert Utils.python_version >= 330
+    assert python_version >= 330
 
-    _markAsGenerator(provider, node, source_ref)
-
-    iter_arg = ExpressionBuiltinIter1(
-        value      = buildNode(provider, node.value, source_ref),
-        source_ref = source_ref
-    )
+    _checkInsideGenerator(provider, node, source_ref)
 
     return ExpressionYieldFrom(
-        expression = iter_arg,
+        expression = buildNode(provider, node.value, source_ref),
         source_ref = source_ref
     )
